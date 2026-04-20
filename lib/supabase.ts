@@ -39,3 +39,12 @@ export type AllowedEmail = {
   created_at: string;
   created_by: string | null;
 };
+
+export type InviteLink = {
+  id: string;
+  role: "admin" | "staff";
+  active: boolean;
+  label: string | null;
+  created_at: string;
+  created_by: string | null;
+};

@@ -29,11 +29,23 @@ export default async function AdminPage() {
     );
   }
 
-  const { data: allowed } = await supabase
-    .from("allowed_emails")
-    .select("*")
-    .order("role", { ascending: true })
-    .order("created_at", { ascending: true });
+  const [{ data: allowed }, { data: links }] = await Promise.all([
+    supabase
+      .from("allowed_emails")
+      .select("*")
+      .order("role", { ascending: true })
+      .order("created_at", { ascending: true }),
+    supabase
+      .from("invite_links")
+      .select("*")
+      .order("created_at", { ascending: false }),
+  ]);
 
-  return <AdminClient initial={allowed ?? []} currentEmail={user.email} />;
+  return (
+    <AdminClient
+      initial={allowed ?? []}
+      initialLinks={links ?? []}
+      currentEmail={user.email}
+    />
+  );
 }

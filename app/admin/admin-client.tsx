@@ -1,17 +1,22 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
-import type { AllowedEmail } from "@/lib/supabase";
+import type { AllowedEmail, InviteLink } from "@/lib/supabase";
 
 export default function AdminClient({
   initial,
+  initialLinks,
   currentEmail,
 }: {
   initial: AllowedEmail[];
+  initialLinks: InviteLink[];
   currentEmail: string;
 }) {
   const [users, setUsers] = useState<AllowedEmail[]>(initial);
+  const [links, setLinks] = useState<InviteLink[]>(initialLinks);
+  const [origin, setOrigin] = useState("");
+  useEffect(() => setOrigin(window.location.origin), []);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState<"admin" | "staff">("staff");
   const [busy, setBusy] = useState(false);
@@ -111,6 +116,59 @@ export default function AdminClient({
     }
   }
 
+  async function createLink(role: "admin" | "staff", label: string) {
+    setError(null);
+    setInfo(null);
+    const supabase = createClient();
+    const { data, error: insertError } = await supabase
+      .from("invite_links")
+      .insert({
+        role,
+        label: label.trim() || null,
+        created_by: currentEmail,
+      })
+      .select()
+      .maybeSingle();
+    if (insertError) setError(insertError.message);
+    else if (data) setLinks((prev) => [data as InviteLink, ...prev]);
+  }
+
+  async function toggleLink(id: string, active: boolean) {
+    setError(null);
+    setInfo(null);
+    const prev = links;
+    setLinks((cur) =>
+      cur.map((l) => (l.id === id ? { ...l, active } : l))
+    );
+    const supabase = createClient();
+    const { error: e } = await supabase
+      .from("invite_links")
+      .update({ active })
+      .eq("id", id);
+    if (e) {
+      setLinks(prev);
+      setError(e.message);
+    }
+  }
+
+  async function deleteLink(id: string) {
+    const ok = window.confirm("Delete this link? Anyone who saved it won't be able to use it anymore.");
+    if (!ok) return;
+    setError(null);
+    setInfo(null);
+    const prev = links;
+    setLinks((cur) => cur.filter((l) => l.id !== id));
+    const supabase = createClient();
+    const { error: e } = await supabase
+      .from("invite_links")
+      .delete()
+      .eq("id", id);
+    if (e) {
+      setLinks(prev);
+      setError(e.message);
+    }
+  }
+
   async function handleResend(email: string) {
     setError(null);
     setInfo(null);
@@ -189,6 +247,14 @@ export default function AdminClient({
         </div>
       )}
 
+      <LinksSection
+        links={links}
+        origin={origin}
+        onCreate={createLink}
+        onToggle={toggleLink}
+        onDelete={deleteLink}
+      />
+
       <Group
         title="Admins"
         users={admins}
@@ -205,6 +271,132 @@ export default function AdminClient({
         onRemove={handleRemove}
         onResend={handleResend}
       />
+    </div>
+  );
+}
+
+function LinksSection({
+  links,
+  origin,
+  onCreate,
+  onToggle,
+  onDelete,
+}: {
+  links: InviteLink[];
+  origin: string;
+  onCreate: (role: "admin" | "staff", label: string) => void;
+  onToggle: (id: string, active: boolean) => void;
+  onDelete: (id: string) => void;
+}) {
+  const [label, setLabel] = useState("");
+  const [role, setRole] = useState<"admin" | "staff">("staff");
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  async function copyLink(id: string) {
+    const url = `${origin}/join/${id}`;
+    await navigator.clipboard.writeText(url);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(null), 1500);
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="field-label">Shareable join links</div>
+      <div className="card p-3 space-y-3">
+        <div className="flex gap-2">
+          <input
+            className="input flex-1"
+            placeholder="Label (optional, e.g. Back-of-house)"
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+          />
+          <button
+            type="button"
+            onClick={() => {
+              onCreate(role, label);
+              setLabel("");
+            }}
+            className="btn-primary !h-auto !py-3 !px-4"
+          >
+            Create
+          </button>
+        </div>
+        <div className="flex gap-2 text-[12px]">
+          {(["staff", "admin"] as const).map((r) => (
+            <button
+              key={r}
+              type="button"
+              data-on={role === r}
+              onClick={() => setRole(r)}
+              className="chip !min-h-0 !py-1.5 !px-3 !text-[12px] capitalize"
+            >
+              New users join as {r}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {links.length > 0 && (
+        <ul className="divide-y divide-[var(--border)] rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] overflow-hidden">
+          {links.map((l) => {
+            const url = `${origin}/join/${l.id}`;
+            return (
+              <li
+                key={l.id}
+                className="flex items-center gap-2 px-3 py-2.5 text-[13.5px]"
+              >
+                <span className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium truncate">
+                      {l.label || "Untitled invite"}
+                    </span>
+                    <span
+                      className="pill capitalize"
+                      style={{
+                        color:
+                          l.role === "admin" ? "var(--danger)" : "var(--muted)",
+                      }}
+                    >
+                      {l.role}
+                    </span>
+                    {!l.active && <span className="pill">revoked</span>}
+                  </div>
+                  <div className="text-[11px] text-[var(--muted)] truncate mt-0.5 font-mono">
+                    {url}
+                  </div>
+                </span>
+                <button
+                  onClick={() => copyLink(l.id)}
+                  disabled={!l.active}
+                  className="btn-ghost !h-8 !text-[12px]"
+                >
+                  {copiedId === l.id ? "Copied ✓" : "Copy link"}
+                </button>
+                <button
+                  onClick={() => onToggle(l.id, !l.active)}
+                  className="btn-ghost !h-8 !text-[12px]"
+                >
+                  {l.active ? "Revoke" : "Reactivate"}
+                </button>
+                <button
+                  onClick={() => onDelete(l.id)}
+                  aria-label="Delete link"
+                  className="h-8 w-8 rounded-md text-[var(--muted)] hover:text-[var(--danger)] hover:bg-[var(--bg-elev)] flex items-center justify-center"
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                    <path
+                      d="M6 6l12 12M18 6L6 18"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                    />
+                  </svg>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </div>
   );
 }
