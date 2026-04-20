@@ -23,6 +23,17 @@ export default function ManagerPage() {
   const [error, setError] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [user, setUser] = useState<User | null>(null);
+  const [toast, setToast] = useState<{
+    msg: string;
+    actionLabel?: string;
+    onAction?: () => void;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!toast) return;
+    const id = setTimeout(() => setToast(null), 4500);
+    return () => clearTimeout(id);
+  }, [toast]);
 
   useEffect(() => {
     const supabase = createClient();
@@ -209,6 +220,7 @@ export default function ManagerPage() {
 
   async function updateCatalogItem(id: string, patch: Partial<CatalogItem>) {
     const supabase = createClient();
+    const before = catalog.find((c) => c.id === id);
     setCatalog((prev) =>
       prev.map((c) => (c.id === id ? { ...c, ...patch } : c))
     );
@@ -216,7 +228,24 @@ export default function ManagerPage() {
       .from("catalog_items")
       .update(patch)
       .eq("id", id);
-    if (error) setError(error.message);
+    if (error) {
+      setError(error.message);
+      return;
+    }
+
+    if (
+      before &&
+      patch.destination &&
+      patch.destination !== before.destination
+    ) {
+      const movedTo = patch.destination;
+      const movedFrom = before.destination;
+      setToast({
+        msg: `Moved ${before.name} → ${movedTo === "owner" ? "Bob's list" : "Manager's list"}`,
+        actionLabel: "Undo",
+        onAction: () => updateCatalogItem(id, { destination: movedFrom }),
+      });
+    }
   }
 
   async function removeCatalogItem(id: string) {
@@ -308,6 +337,26 @@ export default function ManagerPage() {
       {error && (
         <div className="rounded-[var(--radius)] border border-[var(--danger-border)] bg-[var(--danger-soft)] text-[var(--danger)] px-3 py-2 text-sm">
           {error}
+        </div>
+      )}
+
+      {toast && (
+        <div
+          role="status"
+          className="fixed left-1/2 -translate-x-1/2 bottom-[max(20px,env(safe-area-inset-bottom))] z-40 rounded-full bg-[var(--ink)] text-[var(--bg)] px-4 py-2.5 text-sm font-medium shadow-lg flex items-center gap-3"
+        >
+          <span>{toast.msg}</span>
+          {toast.actionLabel && toast.onAction && (
+            <button
+              onClick={() => {
+                toast.onAction?.();
+                setToast(null);
+              }}
+              className="underline underline-offset-2 font-semibold"
+            >
+              {toast.actionLabel}
+            </button>
+          )}
         </div>
       )}
 
@@ -803,10 +852,15 @@ function CatalogRow({
             destination: item.destination === "owner" ? "manager" : "owner",
           })
         }
-        className="btn-ghost !h-7 !text-[11px] capitalize"
-        title="Toggle list owner"
+        className="btn-ghost !h-7 !text-[11px] gap-1"
+        title={
+          item.destination === "owner"
+            ? "Move to Manager's list"
+            : "Move to Bob's list"
+        }
       >
         {item.destination === "owner" ? "Bob" : "Mgr"}
+        <span className="text-[var(--muted-2)]">↔</span>
       </button>
       <button
         onClick={() => onRemove(item.id)}
