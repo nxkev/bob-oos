@@ -626,8 +626,14 @@ function CatalogView({
 }) {
   const [newName, setNewName] = useState("");
   const [newCategory, setNewCategory] = useState<Category>("grocery");
+  const [newDestination, setNewDestination] =
+    useState<Destination>(defaultDestination);
   const [newSupplier, setNewSupplier] = useState("");
   const [groupBy, setGroupBy] = useState<"supplier" | "category">("supplier");
+
+  useEffect(() => {
+    setNewDestination(defaultDestination);
+  }, [defaultDestination]);
 
   const suppliers = useMemo(() => {
     const s = new Set<string>();
@@ -662,7 +668,7 @@ function CatalogView({
                 onAdd(
                   newName,
                   newCategory,
-                  defaultDestination,
+                  newDestination,
                   newSupplier || null
                 );
                 setNewName("");
@@ -676,7 +682,7 @@ function CatalogView({
                 onAdd(
                   newName,
                   newCategory,
-                  defaultDestination,
+                  newDestination,
                   newSupplier || null
                 );
                 setNewName("");
@@ -687,18 +693,23 @@ function CatalogView({
             Add
           </button>
         </div>
-        <div className="flex flex-wrap gap-2 text-[12px]">
-          {(["grocery", "alcohol"] as Category[]).map((c) => (
-            <button
-              key={c}
-              type="button"
-              onClick={() => setNewCategory(c)}
-              data-on={newCategory === c}
-              className="chip !min-h-0 !py-1.5 !px-3 !text-[12px] capitalize"
-            >
-              {c}
-            </button>
-          ))}
+        <div className="flex flex-wrap gap-1.5 items-center text-[12px]">
+          <Segmented<Category>
+            value={newCategory}
+            onChange={setNewCategory}
+            options={[
+              { value: "grocery", label: "Grocery" },
+              { value: "alcohol", label: "Alcohol" },
+            ]}
+          />
+          <Segmented<Destination>
+            value={newDestination}
+            onChange={setNewDestination}
+            options={[
+              { value: "owner", label: "Bob" },
+              { value: "manager", label: "Mgr" },
+            ]}
+          />
           <input
             className="input !py-1.5 !px-3 !text-[12px] !w-[160px] ml-auto"
             placeholder="Supplier (optional)"
@@ -794,7 +805,6 @@ function CatalogGroup({
 
 function CatalogRow({
   item,
-  suppliers,
   onRemove,
   onUpdate,
 }: {
@@ -813,70 +823,111 @@ function CatalogRow({
   }
 
   return (
-    <li className="flex items-center gap-3 px-3 py-2.5 text-[14px]">
-      <span className="flex-1 min-w-0">
-        <span className="font-medium truncate">{item.name}</span>
-        <div className="text-[12px] text-[var(--muted)] mt-0.5 flex items-center gap-2">
-          <span className="capitalize">{item.category}</span>
-          <span className="text-[var(--muted-2)]">·</span>
-          {editingSupplier ? (
-            <input
-              autoFocus
-              list="catalog-suppliers"
-              className="input !py-0.5 !px-1.5 !text-[12px] !w-[140px]"
-              value={supplier}
-              onChange={(e) => setSupplier(e.target.value)}
-              onBlur={commitSupplier}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") commitSupplier();
-                if (e.key === "Escape") {
-                  setSupplier(item.supplier ?? "");
-                  setEditingSupplier(false);
-                }
-              }}
-              placeholder="Supplier"
+    <li className="px-3 py-3 space-y-2 text-[14px]">
+      <div className="flex items-start gap-3">
+        <span className="flex-1 min-w-0">
+          <span className="font-medium block truncate">{item.name}</span>
+          <div className="text-[12px] text-[var(--muted)] mt-0.5">
+            {editingSupplier ? (
+              <input
+                autoFocus
+                list="catalog-suppliers"
+                className="input !py-0.5 !px-1.5 !text-[12px] !w-[160px]"
+                value={supplier}
+                onChange={(e) => setSupplier(e.target.value)}
+                onBlur={commitSupplier}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") commitSupplier();
+                  if (e.key === "Escape") {
+                    setSupplier(item.supplier ?? "");
+                    setEditingSupplier(false);
+                  }
+                }}
+                placeholder="Supplier"
+              />
+            ) : (
+              <button
+                onClick={() => setEditingSupplier(true)}
+                className="hover:text-[var(--ink)] underline-offset-2 hover:underline"
+              >
+                {item.supplier || "+ supplier"}
+              </button>
+            )}
+          </div>
+        </span>
+        <button
+          onClick={() => onRemove(item.id)}
+          aria-label={`Remove ${item.name}`}
+          className="flex-shrink-0 h-7 w-7 rounded-md text-[var(--muted)] hover:text-[var(--danger)] hover:bg-[var(--bg-elev)] flex items-center justify-center"
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+            <path
+              d="M6 6l12 12M18 6L6 18"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
             />
-          ) : (
-            <button
-              onClick={() => setEditingSupplier(true)}
-              className="hover:text-[var(--ink)] underline-offset-2 hover:underline"
-            >
-              {item.supplier || "+ supplier"}
-            </button>
-          )}
-        </div>
-      </span>
-      <button
-        onClick={() =>
-          onUpdate(item.id, {
-            destination: item.destination === "owner" ? "manager" : "owner",
-          })
-        }
-        className="btn-ghost !h-7 !text-[11px] gap-1"
-        title={
-          item.destination === "owner"
-            ? "Move to Manager's list"
-            : "Move to Bob's list"
-        }
-      >
-        {item.destination === "owner" ? "Bob" : "Mgr"}
-        <span className="text-[var(--muted-2)]">↔</span>
-      </button>
-      <button
-        onClick={() => onRemove(item.id)}
-        aria-label={`Remove ${item.name}`}
-        className="h-8 w-8 rounded-md text-[var(--muted)] hover:text-[var(--danger)] hover:bg-[var(--bg-elev)] flex items-center justify-center"
-      >
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-          <path
-            d="M6 6l12 12M18 6L6 18"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-          />
-        </svg>
-      </button>
+          </svg>
+        </button>
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <Segmented<Category>
+          value={item.category}
+          onChange={(category) => onUpdate(item.id, { category })}
+          options={[
+            { value: "grocery", label: "Grocery" },
+            { value: "alcohol", label: "Alcohol" },
+          ]}
+        />
+        <Segmented<Destination>
+          value={item.destination}
+          onChange={(destination) => onUpdate(item.id, { destination })}
+          options={[
+            { value: "owner", label: "Bob" },
+            { value: "manager", label: "Mgr" },
+          ]}
+        />
+      </div>
     </li>
+  );
+}
+
+function Segmented<T extends string>({
+  value,
+  onChange,
+  options,
+}: {
+  value: T;
+  onChange: (v: T) => void;
+  options: { value: T; label: string }[];
+}) {
+  return (
+    <div
+      className="inline-flex rounded-full border border-[var(--border)] bg-[var(--bg-elev)] p-[2px] text-[11px] font-semibold"
+      role="radiogroup"
+    >
+      {options.map((o) => {
+        const on = value === o.value;
+        return (
+          <button
+            key={o.value}
+            type="button"
+            role="radio"
+            aria-checked={on}
+            onClick={() => {
+              if (!on) onChange(o.value);
+            }}
+            className="px-2.5 py-1 rounded-full transition-colors"
+            style={{
+              background: on ? "var(--ink)" : "transparent",
+              color: on ? "var(--bg)" : "var(--muted)",
+            }}
+          >
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
