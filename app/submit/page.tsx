@@ -43,12 +43,13 @@ const DAY_OPTIONS: {
 
 const NAME_KEY = "bob-oos.submitter";
 
-type Submitted = {
-  id: string;
+type Draft = {
+  localId: string;
   item: string;
   category: Category;
   days_left: number;
   is_emergency: boolean;
+  note: string | null;
 };
 
 export default function SubmitPage() {
@@ -57,10 +58,11 @@ export default function SubmitPage() {
   const [category, setCategory] = useState<Category | null>(null);
   const [urgency, setUrgency] = useState<UrgencyKey | null>(null);
   const [note, setNote] = useState("");
+  const [drafts, setDrafts] = useState<Draft[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [justAdded, setJustAdded] = useState(false);
-  const [sessionItems, setSessionItems] = useState<Submitted[]>([]);
+  const [submittedCount, setSubmittedCount] = useState<number | null>(null);
   const itemInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -68,40 +70,68 @@ export default function SubmitPage() {
     if (stored) setName(stored);
   }, []);
 
-  const canAdd = Boolean(
-    name.trim() && item.trim() && category && urgency && !submitting
-  );
+  const canAdd = Boolean(item.trim() && category && urgency);
 
-  async function handleAdd(e: React.FormEvent) {
+  function addToSession(e: React.FormEvent) {
     e.preventDefault();
     if (!canAdd) return;
     setError(null);
-    setSubmitting(true);
-    localStorage.setItem(NAME_KEY, name.trim());
-
-    if (!supabase) {
-      setError(
-        "Supabase isn't configured. Add NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY to .env.local."
-      );
-      setSubmitting(false);
-      return;
-    }
-
     const resolved = resolveUrgency(urgency!);
-    const payload = {
+    const draft: Draft = {
+      localId:
+        typeof crypto !== "undefined" && crypto.randomUUID
+          ? crypto.randomUUID()
+          : String(Date.now() + Math.random()),
       item: item.trim(),
       category: category!,
       days_left: resolved.days,
       is_emergency: resolved.emergency,
       note: note.trim() || null,
-      submitted_by: name.trim(),
     };
+    setDrafts((prev) => [draft, ...prev]);
+    setItem("");
+    setUrgency(null);
+    setNote("");
+    setJustAdded(true);
+    setTimeout(() => setJustAdded(false), 1200);
+    itemInputRef.current?.focus();
+  }
 
-    const { data, error: insertError } = await supabase
+  function removeDraft(localId: string) {
+    setDrafts((prev) => prev.filter((d) => d.localId !== localId));
+  }
+
+  async function submitSession() {
+    if (!name.trim()) {
+      setError("Add your name before submitting.");
+      return;
+    }
+    if (drafts.length === 0) return;
+    setError(null);
+
+    if (!supabase) {
+      setError(
+        "Supabase isn't configured. Add NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY to .env.local."
+      );
+      return;
+    }
+
+    setSubmitting(true);
+    localStorage.setItem(NAME_KEY, name.trim());
+
+    const submitter = name.trim();
+    const rows = drafts.map((d) => ({
+      item: d.item,
+      category: d.category,
+      days_left: d.days_left,
+      is_emergency: d.is_emergency,
+      note: d.note,
+      submitted_by: submitter,
+    }));
+
+    const { error: insertError } = await supabase
       .from("oos_reports")
-      .insert(payload)
-      .select("id")
-      .single();
+      .insert(rows);
 
     setSubmitting(false);
 
@@ -110,34 +140,29 @@ export default function SubmitPage() {
       return;
     }
 
-    setSessionItems((prev) => [
-      {
-        id: data?.id ?? crypto.randomUUID(),
-        item: payload.item,
-        category: payload.category,
-        days_left: payload.days_left,
-        is_emergency: payload.is_emergency,
-      },
-      ...prev,
-    ]);
+    setSubmittedCount(drafts.length);
+    setDrafts([]);
+  }
 
+  function startNewSession() {
+    setSubmittedCount(null);
     setItem("");
     setCategory(null);
     setUrgency(null);
     setNote("");
-    setJustAdded(true);
-    setTimeout(() => setJustAdded(false), 1400);
-    itemInputRef.current?.focus();
+    setError(null);
   }
 
-  const count = sessionItems.length;
+  if (submittedCount !== null) {
+    return <SuccessScreen count={submittedCount} onNew={startNewSession} />;
+  }
 
   return (
     <div className="space-y-7">
       <header>
         <div className="flex items-center justify-between gap-3">
-          <div className="field-label">New report</div>
-          {count > 0 && (
+          <div className="field-label">New session</div>
+          {drafts.length > 0 && (
             <span
               className="pill"
               style={{
@@ -147,56 +172,53 @@ export default function SubmitPage() {
             >
               <span
                 className="dot"
-                style={{ background: "var(--ok)", marginRight: 6 }}
+                style={{ background: "var(--ink)", marginRight: 6 }}
               />
-              {count} sent
+              {drafts.length} queued
             </span>
           )}
         </div>
         <h1 className="text-[28px] leading-[1.1] font-semibold tracking-tight mt-2">
-          {count === 0
-            ? "Flag something running low."
-            : "What else is running low?"}
+          {drafts.length === 0
+            ? "What's running low tonight?"
+            : "Add the next one."}
         </h1>
         <p className="text-[var(--muted)] mt-2 text-[15px]">
-          Tap <span className="font-medium text-[var(--ink)]">+ Add</span> to
-          queue up the next one. Keep going until you&apos;re done.
+          Queue everything up, review it, then send the whole list to the
+          manager.
         </p>
       </header>
 
       {!hasSupabase && (
         <div className="rounded-[var(--radius)] border border-[var(--warn-border)] bg-[var(--warn-soft)] text-[var(--warn)] px-3 py-2 text-sm">
-          Supabase not configured yet — saving is disabled.
+          Supabase not configured yet — submitting is disabled.
         </div>
       )}
 
-      {count > 0 && <SessionList items={sessionItems} />}
+      <Field label="Your name">
+        <input
+          className="input"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Alex"
+          autoComplete="off"
+          enterKeyHint="next"
+        />
+      </Field>
 
-      <form onSubmit={handleAdd} className="space-y-6">
-        <Field label="Your name">
-          <input
-            className="input"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Alex"
-            autoComplete="off"
-            enterKeyHint="next"
-          />
-        </Field>
+      {drafts.length > 0 && (
+        <DraftList items={drafts} onRemove={removeDraft} />
+      )}
 
-        <Field label="What's running out?">
-          <input
-            ref={itemInputRef}
-            className="input"
-            value={item}
-            onChange={(e) => setItem(e.target.value)}
-            placeholder="Limes, Tito's, ribeye..."
-            autoComplete="off"
-            enterKeyHint="next"
-          />
-        </Field>
+      <form onSubmit={addToSession} className="space-y-6">
+        <div className="field-label flex items-center gap-2">
+          <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-[var(--ink)] text-[var(--bg)] text-[11px]">
+            {drafts.length + 1}
+          </span>
+          {drafts.length === 0 ? "First item" : "Next item"}
+        </div>
 
-        <Field label="Category">
+        <Field label="Category (stays selected — keep adding under it)">
           <div className="grid grid-cols-3 gap-2">
             {CATEGORIES.map((c) => (
               <button
@@ -211,6 +233,26 @@ export default function SubmitPage() {
               </button>
             ))}
           </div>
+        </Field>
+
+        <Field label="What's running out?">
+          <input
+            ref={itemInputRef}
+            className="input"
+            value={item}
+            onChange={(e) => setItem(e.target.value)}
+            placeholder={
+              category === "food"
+                ? "e.g. Ribeye, Limes, Cilantro..."
+                : category === "drink"
+                  ? "e.g. Fever-Tree tonic, Coke, Sparkling water..."
+                  : category === "alcohol"
+                    ? "e.g. Tito's, Hendrick's, Pinot Noir..."
+                    : "Limes, Tito's, ribeye..."
+            }
+            autoComplete="off"
+            enterKeyHint="next"
+          />
         </Field>
 
         <Field label="How long will it last?">
@@ -261,42 +303,47 @@ export default function SubmitPage() {
           />
         </Field>
 
-        {error && (
-          <div className="rounded-[var(--radius)] border border-[var(--danger-border)] bg-[var(--danger-soft)] text-[var(--danger)] px-3 py-2 text-sm">
-            {error}
-          </div>
-        )}
-
-        <div className="sticky bottom-0 -mx-4 px-4 pb-[max(16px,env(safe-area-inset-bottom))] pt-3 bg-gradient-to-t from-[var(--bg)] via-[var(--bg)] to-transparent space-y-2">
-          <button
-            type="submit"
-            disabled={!canAdd}
-            className="btn-primary w-full"
-          >
-            {submitting ? (
-              <>
-                <Spinner /> Adding…
-              </>
-            ) : justAdded ? (
-              <>
-                <Check /> Added — next one
-              </>
-            ) : (
-              <>
-                <Plus /> Add {count === 0 ? "" : "another"}
-              </>
-            )}
-          </button>
-          {count > 0 && (
-            <Link
-              href="/"
-              className="block w-full text-center text-[14px] font-medium text-[var(--muted)] hover:text-[var(--ink)] py-2"
-            >
-              Done — view list →
-            </Link>
+        <button
+          type="submit"
+          disabled={!canAdd}
+          className="w-full h-12 rounded-[var(--radius)] border border-dashed border-[var(--border-strong)] text-[var(--ink-soft)] font-medium text-[15px] hover:bg-[var(--bg-elev)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
+        >
+          {justAdded ? (
+            <>
+              <Check /> Added to session
+            </>
+          ) : (
+            <>
+              <Plus /> Add to session
+            </>
           )}
-        </div>
+        </button>
       </form>
+
+      {error && (
+        <div className="rounded-[var(--radius)] border border-[var(--danger-border)] bg-[var(--danger-soft)] text-[var(--danger)] px-3 py-2 text-sm">
+          {error}
+        </div>
+      )}
+
+      <div className="sticky bottom-0 -mx-4 px-4 pb-[max(16px,env(safe-area-inset-bottom))] pt-3 bg-gradient-to-t from-[var(--bg)] via-[var(--bg)] to-transparent">
+        <button
+          type="button"
+          onClick={submitSession}
+          disabled={drafts.length === 0 || submitting || !name.trim()}
+          className="btn-primary w-full"
+        >
+          {submitting ? (
+            <>
+              <Spinner /> Sending…
+            </>
+          ) : drafts.length === 0 ? (
+            "Add items to submit"
+          ) : (
+            `Send ${drafts.length} ${drafts.length === 1 ? "item" : "items"} to manager`
+          )}
+        </button>
+      </div>
     </div>
   );
 }
@@ -349,31 +396,111 @@ function UrgencyChip({
   );
 }
 
-function SessionList({ items }: { items: Submitted[] }) {
+function DraftList({
+  items,
+  onRemove,
+}: {
+  items: Draft[];
+  onRemove: (id: string) => void;
+}) {
   return (
-    <div className="space-y-1.5">
-      <div className="field-label">Added this session</div>
-      <ul className="divide-y divide-[var(--border)] rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] overflow-hidden">
-        {items.map((it) => (
+    <div className="space-y-2">
+      <div className="field-label">Review — {items.length} queued</div>
+      <ul className="space-y-2">
+        {items.map((d) => (
           <li
-            key={it.id}
-            className="flex items-center gap-3 px-3 py-2.5 text-[14px]"
+            key={d.localId}
+            className={`card flex items-start gap-3 px-3 py-2.5 ${
+              d.is_emergency ? "card-danger" : ""
+            }`}
           >
             <span
-              className="flex-shrink-0 h-7 w-7 rounded-lg flex items-center justify-center bg-[var(--bg-elev)]"
+              className="flex-shrink-0 h-9 w-9 rounded-[10px] flex items-center justify-center text-lg bg-[var(--bg-elev)]"
               aria-hidden
             >
-              {CATEGORIES.find((c) => c.value === it.category)?.emoji}
+              {CATEGORIES.find((c) => c.value === d.category)?.emoji}
             </span>
-            <span className="font-medium truncate flex-1">{it.item}</span>
-            <span className="num-mono text-[13px] text-[var(--muted)]">
-              {it.days_left === 0 ? "out" : `${it.days_left}d`}
-            </span>
-            {it.is_emergency && <span className="pill pill-danger">E</span>}
-            <Check size={14} aria-label="saved" />
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-1.5">
+                <span className="font-semibold text-[15px] tracking-tight truncate">
+                  {d.item}
+                </span>
+                {d.is_emergency && (
+                  <span className="pill pill-danger">Emergency</span>
+                )}
+              </div>
+              <div className="text-[13px] text-[var(--muted)] mt-0.5 flex flex-wrap gap-x-2">
+                <span className="num-mono">
+                  {d.days_left === 0 ? "Out now" : `${d.days_left}d left`}
+                </span>
+                <span className="text-[var(--muted-2)]">·</span>
+                <span>
+                  {CATEGORIES.find((c) => c.value === d.category)?.label}
+                </span>
+                {d.note && (
+                  <>
+                    <span className="text-[var(--muted-2)]">·</span>
+                    <span className="italic truncate max-w-[200px]">
+                      {d.note}
+                    </span>
+                  </>
+                )}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => onRemove(d.localId)}
+              aria-label={`Remove ${d.item}`}
+              className="flex-shrink-0 h-8 w-8 rounded-md text-[var(--muted)] hover:text-[var(--danger)] hover:bg-[var(--bg-elev)] flex items-center justify-center transition-colors"
+            >
+              <X />
+            </button>
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+function SuccessScreen({
+  count,
+  onNew,
+}: {
+  count: number;
+  onNew: () => void;
+}) {
+  return (
+    <div className="py-10 text-center space-y-6">
+      <div className="mx-auto h-16 w-16 rounded-full bg-[var(--ok-soft)] flex items-center justify-center">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
+          <path
+            d="M4 12l5 5L20 6"
+            stroke="var(--ok)"
+            strokeWidth="2.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </div>
+      <div>
+        <h1 className="text-[26px] font-semibold tracking-tight">
+          Sent to manager.
+        </h1>
+        <p className="text-[var(--muted)] mt-2">
+          {count} {count === 1 ? "item" : "items"} just landed on the list.
+        </p>
+      </div>
+      <div className="flex flex-col gap-2 max-w-sm mx-auto">
+        <button onClick={onNew} className="btn-primary w-full">
+          Start another session
+        </button>
+        <Link
+          href="/"
+          className="text-[14px] font-medium text-[var(--muted)] hover:text-[var(--ink)] py-2"
+        >
+          View list →
+        </Link>
+      </div>
     </div>
   );
 }
@@ -406,19 +533,28 @@ function Plus() {
   );
 }
 
-function Check({
-  size = 16,
-  ...rest
-}: { size?: number } & React.SVGProps<SVGSVGElement>) {
+function X() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M6 6l12 12M18 6L6 18"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function Check() {
   return (
     <svg
-      width={size}
-      height={size}
+      width="16"
+      height="16"
       viewBox="0 0 24 24"
       fill="none"
       aria-hidden
       style={{ color: "var(--ok)" }}
-      {...rest}
     >
       <path
         d="M4 12l5 5L20 6"
