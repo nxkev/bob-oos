@@ -477,7 +477,31 @@ function ReportRow({
             </span>
           )}
         </div>
-        <div className="text-[12.5px] text-[var(--muted)] mt-0.5 flex flex-wrap gap-x-2">
+        <div className="text-[12.5px] text-[var(--muted)] mt-0.5 flex flex-wrap gap-x-2 items-center">
+          {report.status_kind === "emergency" ? (
+            <span className="pill pill-danger">Emergency</span>
+          ) : report.status_kind === "out" ? (
+            <span
+              className="pill"
+              style={{
+                color: "var(--ink)",
+                borderColor: "var(--border-strong)",
+              }}
+            >
+              Out
+            </span>
+          ) : report.status_kind === "low" ? (
+            <span
+              className="pill num-mono"
+              style={{
+                color: "var(--warn)",
+                background: "var(--warn-soft)",
+                borderColor: "var(--warn-border)",
+              }}
+            >
+              Low · {report.qty_left ?? "?"}
+            </span>
+          ) : null}
           {isOpen ? (
             <>
               <span>{report.submitted_by}</span>

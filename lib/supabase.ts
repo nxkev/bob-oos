@@ -1,5 +1,6 @@
 export type Category = "grocery" | "alcohol";
 export type Status = "open" | "resolved";
+export type StatusKind = "out" | "low" | "emergency";
 export type Destination = "owner" | "manager";
 
 export const DESTINATION_LABEL: Record<Destination, string> = {
@@ -20,6 +21,8 @@ export type OosReport = {
   resolved_at: string | null;
   catalog_item_id: string | null;
   destination: Destination;
+  status_kind: StatusKind | null;
+  qty_left: number | null;
 };
 
 export type CatalogItem = {
