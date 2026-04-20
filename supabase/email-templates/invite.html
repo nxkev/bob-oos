@@ -24,7 +24,7 @@
                 <table role="presentation" cellspacing="0" cellpadding="0" style="margin:0 0 24px 0;">
                   <tr>
                     <td style="background:#141414;border-radius:12px;">
-                      <a href="{{ .ConfirmationURL }}" style="display:inline-block;padding:14px 24px;color:#faf9f6;text-decoration:none;font-weight:600;font-size:15px;letter-spacing:-0.005em;">
+                      <a href="{{ .SiteURL }}/auth/callback?token_hash={{ .TokenHash }}&type=invite" style="display:inline-block;padding:14px 24px;color:#faf9f6;text-decoration:none;font-weight:600;font-size:15px;letter-spacing:-0.005em;">
                         Accept invite
                       </a>
                     </td>
@@ -32,7 +32,7 @@
                 </table>
                 <p style="margin:0 0 8px 0;font-size:13px;color:#72716a;">Or paste this link into your browser:</p>
                 <p style="margin:0 0 24px 0;font-size:12px;color:#72716a;word-break:break-all;">
-                  <a href="{{ .ConfirmationURL }}" style="color:#72716a;">{{ .ConfirmationURL }}</a>
+                  <a href="{{ .SiteURL }}/auth/callback?token_hash={{ .TokenHash }}&type=invite" style="color:#72716a;">{{ .SiteURL }}/auth/callback?token_hash={{ .TokenHash }}&type=invite</a>
                 </p>
               </td>
             </tr>

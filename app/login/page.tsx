@@ -23,10 +23,12 @@ function LoginForm() {
   const [sent, setSent] = useState(false);
   const [code, setCode] = useState("");
   const [verifying, setVerifying] = useState(false);
+  const benignErrors = new Set([
+    "Email link is invalid or has expired",
+    "PKCE code verifier not found in storage. This can happen if the auth flow was initiated in a different browser or device, or if the storage was cleared. For SSR frameworks (Next.js, SvelteKit, etc.), use @supabase/ssr on both the server and client to store the code verifier in cookies.",
+  ]);
   const [error, setError] = useState<string | null>(
-    initialError && initialError !== "Email link is invalid or has expired"
-      ? initialError
-      : null
+    initialError && !benignErrors.has(initialError) ? initialError : null
   );
 
   async function handleSend(e: React.FormEvent) {
@@ -58,7 +60,8 @@ function LoginForm() {
     e.preventDefault();
     const cleanedEmail = email.trim().toLowerCase();
     const cleanedCode = code.replace(/\D/g, "");
-    if (!cleanedEmail || cleanedCode.length < 6) return;
+    if (!cleanedEmail || cleanedCode.length < 6 || cleanedCode.length > 10)
+      return;
     setError(null);
     setVerifying(true);
 
@@ -88,7 +91,7 @@ function LoginForm() {
         </h1>
         <p className="text-[var(--muted)] text-[15px]">
           {sent
-            ? "Enter the 6-digit code from your email. The code is more reliable than the link on some inboxes (Yahoo, Outlook)."
+            ? "Enter the code from your email. The code is more reliable than the link on some inboxes (Yahoo, Outlook)."
             : "We'll email you a code. No passwords."}
         </p>
       </div>
@@ -100,19 +103,19 @@ function LoginForm() {
       ) : sent ? (
         <form onSubmit={handleVerify} className="space-y-4">
           <div className="space-y-2">
-            <label className="field-label">6-digit code</label>
+            <label className="field-label">Code from email</label>
             <input
               type="text"
               inputMode="numeric"
               pattern="[0-9]*"
               autoComplete="one-time-code"
               autoFocus
-              maxLength={6}
-              className="input text-center text-[28px] tracking-[12px] font-semibold num-mono"
+              maxLength={10}
+              className="input text-center text-[26px] tracking-[8px] font-semibold num-mono"
               placeholder="••••••"
               value={code}
               onChange={(e) =>
-                setCode(e.target.value.replace(/\D/g, "").slice(0, 6))
+                setCode(e.target.value.replace(/\D/g, "").slice(0, 10))
               }
             />
             <div className="text-[12px] text-[var(--muted-2)] text-center">
@@ -128,7 +131,7 @@ function LoginForm() {
 
           <button
             type="submit"
-            disabled={verifying || code.length < 6}
+            disabled={verifying || code.length < 6 || code.length > 10}
             className="btn-primary w-full"
           >
             {verifying ? "Verifying…" : "Sign in"}
