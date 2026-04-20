@@ -24,6 +24,7 @@ const CATEGORY_EMOJI: Record<Category, string> = {
 
 type CategoryFilter = Category | "all";
 type StatusFilter = Status | "all";
+type SortKey = "urgency" | "alpha";
 
 export default function ManagerListPage() {
   const [reports, setReports] = useState<OosReport[]>([]);
@@ -31,6 +32,7 @@ export default function ManagerListPage() {
   const [error, setError] = useState<string | null>(null);
   const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>("all");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("open");
+  const [sortKey, setSortKey] = useState<SortKey>("urgency");
 
   useEffect(() => {
     if (!supabase) {
@@ -69,16 +71,24 @@ export default function ManagerListPage() {
     };
   }, []);
 
-  const filtered = useMemo(
-    () =>
-      reports.filter((r) => {
-        if (categoryFilter !== "all" && r.category !== categoryFilter)
-          return false;
-        if (statusFilter !== "all" && r.status !== statusFilter) return false;
-        return true;
-      }),
-    [reports, categoryFilter, statusFilter]
-  );
+  const filtered = useMemo(() => {
+    const base = reports.filter((r) => {
+      if (categoryFilter !== "all" && r.category !== categoryFilter)
+        return false;
+      if (statusFilter !== "all" && r.status !== statusFilter) return false;
+      return true;
+    });
+    if (sortKey === "alpha") {
+      return [...base].sort((a, b) =>
+        a.item.localeCompare(b.item, undefined, { sensitivity: "base" })
+      );
+    }
+    return [...base].sort((a, b) => {
+      if (a.is_emergency !== b.is_emergency) return a.is_emergency ? -1 : 1;
+      if (a.days_left !== b.days_left) return a.days_left - b.days_left;
+      return b.created_at.localeCompare(a.created_at);
+    });
+  }, [reports, categoryFilter, statusFilter, sortKey]);
 
   const openReports = reports.filter((r) => r.status === "open");
   const openCount = openReports.length;
@@ -178,6 +188,23 @@ export default function ManagerListPage() {
               key={o.value}
               data-on={categoryFilter === o.value}
               onClick={() => setCategoryFilter(o.value)}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+        <div className="seg ml-auto">
+          {(
+            [
+              { value: "urgency", label: "Days left" },
+              { value: "alpha", label: "A–Z" },
+            ] as { value: SortKey; label: string }[]
+          ).map((o) => (
+            <button
+              key={o.value}
+              data-on={sortKey === o.value}
+              onClick={() => setSortKey(o.value)}
+              aria-label={`Sort by ${o.label}`}
             >
               {o.label}
             </button>
