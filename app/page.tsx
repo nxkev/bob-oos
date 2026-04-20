@@ -122,6 +122,26 @@ export default function ManagerListPage() {
     if (updateError) setError(updateError.message);
   }
 
+  async function clearResolved() {
+    if (!supabase) return;
+    const resolvedIds = reports
+      .filter((r) => r.status === "resolved")
+      .map((r) => r.id);
+    if (resolvedIds.length === 0) return;
+    const ok = window.confirm(
+      `Delete ${resolvedIds.length} resolved ${resolvedIds.length === 1 ? "item" : "items"}? This cannot be undone.`
+    );
+    if (!ok) return;
+    setReports((prev) => prev.filter((r) => r.status !== "resolved"));
+    const { error: deleteError } = await supabase
+      .from("oos_reports")
+      .delete()
+      .in("id", resolvedIds);
+    if (deleteError) setError(deleteError.message);
+  }
+
+  const resolvedCount = reports.length - openCount;
+
   return (
     <div className="space-y-6">
       <header className="space-y-4">
@@ -143,7 +163,7 @@ export default function ManagerListPage() {
         <StatRow
           openCount={openCount}
           emergencyCount={emergencyCount}
-          resolvedCount={reports.length - openCount}
+          resolvedCount={resolvedCount}
         />
       </header>
 
@@ -208,6 +228,24 @@ export default function ManagerListPage() {
           ))}
         </div>
       </div>
+
+      {resolvedCount > 0 &&
+        (statusFilter === "resolved" || statusFilter === "all") && (
+          <div className="flex items-center justify-between gap-2 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--bg-elev)] px-3 py-2">
+            <div className="text-[13px] text-[var(--muted)]">
+              {resolvedCount} resolved{" "}
+              {resolvedCount === 1 ? "item" : "items"} — items older than 7
+              days are flagged.
+            </div>
+            <button
+              onClick={clearResolved}
+              className="btn-ghost !h-8 !text-[13px] gap-1.5 text-[var(--danger)] border-[var(--danger-border)] hover:bg-[var(--danger-soft)]"
+              aria-label="Delete all resolved items"
+            >
+              <Trash /> Clear resolved
+            </button>
+          </div>
+        )}
 
       {error && (
         <div className="rounded-[var(--radius)] border border-[var(--danger-border)] bg-[var(--danger-soft)] text-[var(--danger)] px-3 py-2 text-sm">
@@ -305,10 +343,13 @@ function ReportRow({
   const isOpen = report.status === "open";
   const urgent = isOpen && report.is_emergency;
   const soon = isOpen && report.days_left <= 1 && !report.is_emergency;
+  const resolvedDays =
+    !isOpen && report.resolved_at ? daysSince(report.resolved_at) : null;
+  const stale = resolvedDays !== null && resolvedDays >= 7;
 
   return (
     <li
-      className={`card p-4 flex items-start gap-3 ${urgent ? "card-danger" : soon ? "card-warn" : ""} ${isOpen ? "" : "opacity-60"}`}
+      className={`card p-4 flex items-start gap-3 ${urgent ? "card-danger" : soon ? "card-warn" : ""} ${isOpen ? "" : stale ? "opacity-70" : "opacity-60"}`}
     >
       <div
         className="flex-shrink-0 h-10 w-10 rounded-[10px] flex items-center justify-center text-xl bg-[var(--bg-elev)]"
@@ -324,31 +365,81 @@ function ReportRow({
             {report.item}
           </span>
           {urgent && <span className="pill pill-danger">Emergency</span>}
+          {stale && (
+            <span
+              className="pill"
+              style={{
+                background: "var(--warn-soft)",
+                color: "var(--warn)",
+                borderColor: "var(--warn-border)",
+              }}
+            >
+              Clear me
+            </span>
+          )}
         </div>
         <div className="text-[13px] text-[var(--muted)] mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
-          <span className="inline-flex items-center gap-1.5">
-            <span
-              className="dot"
-              style={{
-                background: urgent
-                  ? "var(--danger)"
-                  : soon
-                    ? "var(--warn)"
-                    : "var(--muted-2)",
-              }}
-            />
-            <span className={urgent || soon ? "font-medium" : ""}>
-              {report.days_left === 0
-                ? "Out now"
-                : `${report.days_left} day${report.days_left === 1 ? "" : "s"} left`}
-            </span>
-          </span>
-          <span className="text-[var(--muted-2)]">·</span>
-          <span>{CATEGORY_LABEL[report.category]}</span>
-          <span className="text-[var(--muted-2)]">·</span>
-          <span>{report.submitted_by}</span>
-          <span className="text-[var(--muted-2)]">·</span>
-          <span className="num-mono">{relativeTime(report.created_at)}</span>
+          {isOpen ? (
+            <>
+              <span className="inline-flex items-center gap-1.5">
+                <span
+                  className="dot"
+                  style={{
+                    background: urgent
+                      ? "var(--danger)"
+                      : soon
+                        ? "var(--warn)"
+                        : "var(--muted-2)",
+                  }}
+                />
+                <span className={urgent || soon ? "font-medium" : ""}>
+                  {report.days_left === 0
+                    ? "Out now"
+                    : `${report.days_left} day${report.days_left === 1 ? "" : "s"} left`}
+                </span>
+              </span>
+              <span className="text-[var(--muted-2)]">·</span>
+              <span>{CATEGORY_LABEL[report.category]}</span>
+              <span className="text-[var(--muted-2)]">·</span>
+              <span>{report.submitted_by}</span>
+              <span className="text-[var(--muted-2)]">·</span>
+              <span className="num-mono">
+                {relativeTime(report.created_at)}
+              </span>
+            </>
+          ) : (
+            <>
+              <span
+                className={`inline-flex items-center gap-1.5 ${stale ? "font-medium text-[var(--warn)]" : ""}`}
+              >
+                <svg
+                  width="12"
+                  height="12"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  aria-hidden
+                >
+                  <path
+                    d="M4 12l5 5L20 6"
+                    stroke="currentColor"
+                    strokeWidth="3"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+                Resolved{" "}
+                {resolvedDays === 0
+                  ? "today"
+                  : resolvedDays === 1
+                    ? "yesterday"
+                    : `${resolvedDays}d ago`}
+              </span>
+              <span className="text-[var(--muted-2)]">·</span>
+              <span>{CATEGORY_LABEL[report.category]}</span>
+              <span className="text-[var(--muted-2)]">·</span>
+              <span>{report.submitted_by}</span>
+            </>
+          )}
         </div>
         {report.note && (
           <div className="text-[13.5px] mt-2 text-[var(--ink-soft)] whitespace-pre-wrap">
@@ -444,6 +535,26 @@ function Plus({ size = 16 }: { size?: number }) {
       />
     </svg>
   );
+}
+
+function Trash() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M4 7h16M10 11v6M14 11v6M5 7l1 13a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2l1-13M9 7V4h6v3"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function daysSince(iso: string): number {
+  const then = new Date(iso).getTime();
+  const now = Date.now();
+  return Math.floor((now - then) / (1000 * 60 * 60 * 24));
 }
 
 function relativeTime(iso: string): string {
