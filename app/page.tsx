@@ -11,14 +11,12 @@ import {
 } from "@/lib/supabase";
 
 const CATEGORY_LABEL: Record<Category, string> = {
-  food: "Food",
-  drink: "Drink",
-  alcohol: "Bar",
+  grocery: "Grocery",
+  alcohol: "Alcohol",
 };
 
 const CATEGORY_EMOJI: Record<Category, string> = {
-  food: "🍔",
-  drink: "🥤",
+  grocery: "🥬",
   alcohol: "🍸",
 };
 
@@ -179,9 +177,8 @@ export default function ManagerListPage() {
           {(
             [
               { value: "all", label: "All" },
-              { value: "food", label: "Food" },
-              { value: "drink", label: "Drink" },
-              { value: "alcohol", label: "Bar" },
+              { value: "grocery", label: "Grocery" },
+              { value: "alcohol", label: "Alcohol" },
             ] as { value: CategoryFilter; label: string }[]
           ).map((o) => (
             <button

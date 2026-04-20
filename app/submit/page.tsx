@@ -5,9 +5,8 @@ import Link from "next/link";
 import { supabase, hasSupabase, type Category } from "@/lib/supabase";
 
 const CATEGORIES: { value: Category; label: string; emoji: string }[] = [
-  { value: "food", label: "Food", emoji: "🍔" },
-  { value: "drink", label: "Drink", emoji: "🥤" },
-  { value: "alcohol", label: "Bar", emoji: "🍸" },
+  { value: "grocery", label: "Grocery", emoji: "🥬" },
+  { value: "alcohol", label: "Alcohol", emoji: "🍸" },
 ];
 
 type UrgencyKey = "out" | "emergency" | "1" | "2" | "3" | "7";
@@ -219,7 +218,7 @@ export default function SubmitPage() {
         </div>
 
         <Field label="Category (stays selected — keep adding under it)">
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 gap-2">
             {CATEGORIES.map((c) => (
               <button
                 type="button"
@@ -242,13 +241,11 @@ export default function SubmitPage() {
             value={item}
             onChange={(e) => setItem(e.target.value)}
             placeholder={
-              category === "food"
-                ? "e.g. Ribeye, Limes, Cilantro..."
-                : category === "drink"
-                  ? "e.g. Fever-Tree tonic, Coke, Sparkling water..."
-                  : category === "alcohol"
-                    ? "e.g. Tito's, Hendrick's, Pinot Noir..."
-                    : "Limes, Tito's, ribeye..."
+              category === "grocery"
+                ? "e.g. Limes, Ribeye, Cilantro..."
+                : category === "alcohol"
+                  ? "e.g. Tito's, Hendrick's, Pinot Noir..."
+                  : "Limes, Tito's, ribeye..."
             }
             autoComplete="off"
             enterKeyHint="next"

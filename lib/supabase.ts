@@ -8,7 +8,7 @@ export const supabase =
 
 export const hasSupabase = Boolean(url && anonKey);
 
-export type Category = "food" | "drink" | "alcohol";
+export type Category = "grocery" | "alcohol";
 export type Status = "open" | "resolved";
 
 export type OosReport = {

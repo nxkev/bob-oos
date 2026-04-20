@@ -5,7 +5,7 @@ create extension if not exists "pgcrypto";
 create table if not exists public.oos_reports (
   id uuid primary key default gen_random_uuid(),
   item text not null,
-  category text not null check (category in ('food', 'drink', 'alcohol')),
+  category text not null check (category in ('grocery', 'alcohol')),
   days_left int not null check (days_left >= 0),
   is_emergency boolean not null default false,
   note text,
