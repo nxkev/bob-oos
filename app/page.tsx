@@ -1,65 +1,436 @@
-import Image from "next/image";
+"use client";
 
-export default function Home() {
+import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import {
+  supabase,
+  hasSupabase,
+  type Category,
+  type OosReport,
+  type Status,
+} from "@/lib/supabase";
+
+const CATEGORY_LABEL: Record<Category, string> = {
+  food: "Food",
+  drink: "Drink",
+  alcohol: "Bar",
+};
+
+const CATEGORY_EMOJI: Record<Category, string> = {
+  food: "🍔",
+  drink: "🥤",
+  alcohol: "🍸",
+};
+
+type CategoryFilter = Category | "all";
+type StatusFilter = Status | "all";
+
+export default function ManagerListPage() {
+  const [reports, setReports] = useState<OosReport[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>("all");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("open");
+
+  useEffect(() => {
+    if (!supabase) {
+      setLoading(false);
+      return;
+    }
+    const client = supabase;
+    let cancelled = false;
+
+    async function load() {
+      const { data, error: fetchError } = await client
+        .from("oos_reports")
+        .select("*")
+        .order("is_emergency", { ascending: false })
+        .order("days_left", { ascending: true })
+        .order("created_at", { ascending: false });
+      if (cancelled) return;
+      if (fetchError) setError(fetchError.message);
+      else setReports((data ?? []) as OosReport[]);
+      setLoading(false);
+    }
+
+    load();
+    const channel = client
+      .channel("oos_reports_changes")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "oos_reports" },
+        () => load()
+      )
+      .subscribe();
+
+    return () => {
+      cancelled = true;
+      client.removeChannel(channel);
+    };
+  }, []);
+
+  const filtered = useMemo(
+    () =>
+      reports.filter((r) => {
+        if (categoryFilter !== "all" && r.category !== categoryFilter)
+          return false;
+        if (statusFilter !== "all" && r.status !== statusFilter) return false;
+        return true;
+      }),
+    [reports, categoryFilter, statusFilter]
+  );
+
+  const openReports = reports.filter((r) => r.status === "open");
+  const openCount = openReports.length;
+  const emergencyCount = openReports.filter((r) => r.is_emergency).length;
+
+  async function resolve(id: string) {
+    if (!supabase) return;
+    setReports((prev) =>
+      prev.map((r) =>
+        r.id === id
+          ? { ...r, status: "resolved", resolved_at: new Date().toISOString() }
+          : r
+      )
+    );
+    const { error: updateError } = await supabase
+      .from("oos_reports")
+      .update({ status: "resolved", resolved_at: new Date().toISOString() })
+      .eq("id", id);
+    if (updateError) setError(updateError.message);
+  }
+
+  async function reopen(id: string) {
+    if (!supabase) return;
+    setReports((prev) =>
+      prev.map((r) =>
+        r.id === id ? { ...r, status: "open", resolved_at: null } : r
+      )
+    );
+    const { error: updateError } = await supabase
+      .from("oos_reports")
+      .update({ status: "open", resolved_at: null })
+      .eq("id", id);
+    if (updateError) setError(updateError.message);
+  }
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
+    <div className="space-y-6">
+      <header className="space-y-4">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <div className="field-label mb-2">Inventory</div>
+            <h1 className="text-[28px] leading-[1.1] font-semibold tracking-tight">
+              Running low.
+            </h1>
+          </div>
+          <Link
+            href="/submit"
+            className="btn-ghost !h-9 hidden sm:inline-flex gap-1.5"
+          >
+            <Plus /> New
+          </Link>
+        </div>
+
+        <StatRow
+          openCount={openCount}
+          emergencyCount={emergencyCount}
+          resolvedCount={reports.length - openCount}
         />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+      </header>
+
+      {!hasSupabase && (
+        <div className="rounded-[var(--radius)] border border-[var(--warn-border)] bg-[var(--warn-soft)] text-[var(--warn)] px-3 py-2 text-sm">
+          Supabase not configured. Copy <code>.env.local.example</code> →{" "}
+          <code>.env.local</code>, run <code>supabase/schema.sql</code>, restart
+          dev.
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
+      )}
+
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="seg">
+          {(
+            [
+              { value: "open", label: "Open" },
+              { value: "resolved", label: "Resolved" },
+              { value: "all", label: "All" },
+            ] as { value: StatusFilter; label: string }[]
+          ).map((o) => (
+            <button
+              key={o.value}
+              data-on={statusFilter === o.value}
+              onClick={() => setStatusFilter(o.value)}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+        <div className="seg">
+          {(
+            [
+              { value: "all", label: "All" },
+              { value: "food", label: "Food" },
+              { value: "drink", label: "Drink" },
+              { value: "alcohol", label: "Bar" },
+            ] as { value: CategoryFilter; label: string }[]
+          ).map((o) => (
+            <button
+              key={o.value}
+              data-on={categoryFilter === o.value}
+              onClick={() => setCategoryFilter(o.value)}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {error && (
+        <div className="rounded-[var(--radius)] border border-[var(--danger-border)] bg-[var(--danger-soft)] text-[var(--danger)] px-3 py-2 text-sm">
+          {error}
+        </div>
+      )}
+
+      {loading ? (
+        <LoadingList />
+      ) : filtered.length === 0 ? (
+        <EmptyState hasSupabase={hasSupabase} statusFilter={statusFilter} />
+      ) : (
+        <ul className="space-y-2.5">
+          {filtered.map((r) => (
+            <ReportRow
+              key={r.id}
+              report={r}
+              onResolve={resolve}
+              onReopen={reopen}
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
+          ))}
+        </ul>
+      )}
+
+      <Link
+        href="/submit"
+        className="sm:hidden fixed bottom-[max(20px,env(safe-area-inset-bottom))] right-4 z-30 h-14 w-14 rounded-full bg-[var(--ink)] text-[var(--bg)] flex items-center justify-center shadow-lg"
+        aria-label="Submit new"
+      >
+        <Plus size={22} />
+      </Link>
     </div>
   );
+}
+
+function StatRow({
+  openCount,
+  emergencyCount,
+  resolvedCount,
+}: {
+  openCount: number;
+  emergencyCount: number;
+  resolvedCount: number;
+}) {
+  return (
+    <div className="grid grid-cols-3 gap-2">
+      <Stat label="Open" value={openCount} />
+      <Stat
+        label="Emergency"
+        value={emergencyCount}
+        tone={emergencyCount > 0 ? "danger" : "default"}
+      />
+      <Stat label="Resolved" value={resolvedCount} tone="muted" />
+    </div>
+  );
+}
+
+function Stat({
+  label,
+  value,
+  tone = "default",
+}: {
+  label: string;
+  value: number;
+  tone?: "default" | "danger" | "muted";
+}) {
+  const valueColor =
+    tone === "danger"
+      ? "var(--danger)"
+      : tone === "muted"
+        ? "var(--muted)"
+        : "var(--ink)";
+  return (
+    <div className="card px-3.5 py-3">
+      <div className="field-label !text-[11px]">{label}</div>
+      <div
+        className="num-mono text-2xl font-semibold leading-tight mt-1"
+        style={{ color: valueColor }}
+      >
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function ReportRow({
+  report,
+  onResolve,
+  onReopen,
+}: {
+  report: OosReport;
+  onResolve: (id: string) => void;
+  onReopen: (id: string) => void;
+}) {
+  const isOpen = report.status === "open";
+  const urgent = isOpen && report.is_emergency;
+  const soon = isOpen && report.days_left <= 1 && !report.is_emergency;
+
+  return (
+    <li
+      className={`card p-4 flex items-start gap-3 ${urgent ? "card-danger" : soon ? "card-warn" : ""} ${isOpen ? "" : "opacity-60"}`}
+    >
+      <div
+        className="flex-shrink-0 h-10 w-10 rounded-[10px] flex items-center justify-center text-xl bg-[var(--bg-elev)]"
+        aria-hidden
+      >
+        {CATEGORY_EMOJI[report.category]}
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center flex-wrap gap-1.5">
+          <span
+            className={`font-semibold text-[15px] tracking-tight ${isOpen ? "" : "line-through"}`}
+          >
+            {report.item}
+          </span>
+          {urgent && <span className="pill pill-danger">Emergency</span>}
+        </div>
+        <div className="text-[13px] text-[var(--muted)] mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+          <span className="inline-flex items-center gap-1.5">
+            <span
+              className="dot"
+              style={{
+                background: urgent
+                  ? "var(--danger)"
+                  : soon
+                    ? "var(--warn)"
+                    : "var(--muted-2)",
+              }}
+            />
+            <span className={urgent || soon ? "font-medium" : ""}>
+              {report.days_left === 0
+                ? "Out now"
+                : `${report.days_left} day${report.days_left === 1 ? "" : "s"} left`}
+            </span>
+          </span>
+          <span className="text-[var(--muted-2)]">·</span>
+          <span>{CATEGORY_LABEL[report.category]}</span>
+          <span className="text-[var(--muted-2)]">·</span>
+          <span>{report.submitted_by}</span>
+          <span className="text-[var(--muted-2)]">·</span>
+          <span className="num-mono">{relativeTime(report.created_at)}</span>
+        </div>
+        {report.note && (
+          <div className="text-[13.5px] mt-2 text-[var(--ink-soft)] whitespace-pre-wrap">
+            {report.note}
+          </div>
+        )}
+      </div>
+      <div className="flex-shrink-0">
+        {isOpen ? (
+          <button
+            onClick={() => onResolve(report.id)}
+            className="btn-ghost"
+            aria-label={`Resolve ${report.item}`}
+          >
+            Resolve
+          </button>
+        ) : (
+          <button
+            onClick={() => onReopen(report.id)}
+            className="btn-ghost !text-[var(--muted)]"
+            aria-label={`Reopen ${report.item}`}
+          >
+            Reopen
+          </button>
+        )}
+      </div>
+    </li>
+  );
+}
+
+function EmptyState({
+  hasSupabase,
+  statusFilter,
+}: {
+  hasSupabase: boolean;
+  statusFilter: StatusFilter;
+}) {
+  const heading = !hasSupabase
+    ? "No data yet"
+    : statusFilter === "resolved"
+      ? "Nothing resolved yet"
+      : "Everything's in stock.";
+  const sub = hasSupabase
+    ? statusFilter === "resolved"
+      ? "Resolved items will land here."
+      : "Staff reports will appear here the moment they come in."
+    : "Finish the Supabase setup to start receiving reports.";
+  return (
+    <div className="card py-14 px-6 text-center">
+      <div className="mx-auto h-12 w-12 rounded-full flex items-center justify-center bg-[var(--bg-elev)] mb-4">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+          <path
+            d="M5 13l4 4L19 7"
+            stroke="var(--ok)"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </div>
+      <div className="font-semibold text-[15px]">{heading}</div>
+      <div className="text-[13px] text-[var(--muted)] mt-1 max-w-xs mx-auto">
+        {sub}
+      </div>
+    </div>
+  );
+}
+
+function LoadingList() {
+  return (
+    <ul className="space-y-2.5">
+      {[0, 1, 2].map((i) => (
+        <li key={i} className="card p-4 flex items-center gap-3">
+          <div className="h-10 w-10 rounded-[10px] bg-[var(--bg-elev)] animate-pulse" />
+          <div className="flex-1 space-y-2">
+            <div className="h-4 w-2/3 rounded bg-[var(--bg-elev)] animate-pulse" />
+            <div className="h-3 w-1/2 rounded bg-[var(--bg-elev)] animate-pulse" />
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function Plus({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M12 5v14M5 12h14"
+        stroke="currentColor"
+        strokeWidth="2.2"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function relativeTime(iso: string): string {
+  const then = new Date(iso).getTime();
+  const now = Date.now();
+  const diffSec = Math.round((now - then) / 1000);
+  if (diffSec < 60) return "just now";
+  const diffMin = Math.round(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHr = Math.round(diffMin / 60);
+  if (diffHr < 24) return `${diffHr}h ago`;
+  const diffDay = Math.round(diffHr / 24);
+  return `${diffDay}d ago`;
 }
