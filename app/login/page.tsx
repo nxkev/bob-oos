@@ -1,7 +1,7 @@
 "use client";
 
 import { Suspense, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { createClient, hasSupabase } from "@/lib/supabase/client";
 
 export default function LoginPage() {
@@ -13,14 +13,23 @@ export default function LoginPage() {
 }
 
 function LoginForm() {
+  const router = useRouter();
   const params = useSearchParams();
   const next = params.get("next") || "/";
+  const initialError = params.get("error");
+
   const [email, setEmail] = useState("");
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [code, setCode] = useState("");
+  const [verifying, setVerifying] = useState(false);
+  const [error, setError] = useState<string | null>(
+    initialError && initialError !== "Email link is invalid or has expired"
+      ? initialError
+      : null
+  );
 
-  async function handleSubmit(e: React.FormEvent) {
+  async function handleSend(e: React.FormEvent) {
     e.preventDefault();
     const cleaned = email.trim().toLowerCase();
     if (!cleaned) return;
@@ -45,6 +54,29 @@ function LoginForm() {
     setSent(true);
   }
 
+  async function handleVerify(e: React.FormEvent) {
+    e.preventDefault();
+    const cleanedEmail = email.trim().toLowerCase();
+    const cleanedCode = code.replace(/\D/g, "");
+    if (!cleanedEmail || cleanedCode.length < 6) return;
+    setError(null);
+    setVerifying(true);
+
+    const supabase = createClient();
+    const { error: verifyError } = await supabase.auth.verifyOtp({
+      email: cleanedEmail,
+      token: cleanedCode,
+      type: "email",
+    });
+    setVerifying(false);
+    if (verifyError) {
+      setError(verifyError.message);
+      return;
+    }
+    router.replace(next);
+    router.refresh();
+  }
+
   return (
     <div className="max-w-sm mx-auto pt-12 space-y-8">
       <div className="text-center space-y-3">
@@ -55,8 +87,9 @@ function LoginForm() {
           Sign in to Bob&apos;s OOS
         </h1>
         <p className="text-[var(--muted)] text-[15px]">
-          We&apos;ll email you a magic link. One tap and you&apos;re in — no
-          passwords.
+          {sent
+            ? "Enter the 6-digit code from your email. The code is more reliable than the link on some inboxes (Yahoo, Outlook)."
+            : "We'll email you a code. No passwords."}
         </p>
       </div>
 
@@ -65,35 +98,81 @@ function LoginForm() {
           Supabase isn&apos;t configured yet.
         </div>
       ) : sent ? (
-        <div className="card p-5 text-center space-y-3">
-          <div className="mx-auto h-10 w-10 rounded-full bg-[var(--ok-soft)] flex items-center justify-center">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-              <path
-                d="M4 12l5 5L20 6"
-                stroke="var(--ok)"
-                strokeWidth="2.6"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
+        <form onSubmit={handleVerify} className="space-y-4">
+          <div className="space-y-2">
+            <label className="field-label">6-digit code</label>
+            <input
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              autoComplete="one-time-code"
+              autoFocus
+              maxLength={6}
+              className="input text-center text-[28px] tracking-[12px] font-semibold num-mono"
+              placeholder="••••••"
+              value={code}
+              onChange={(e) =>
+                setCode(e.target.value.replace(/\D/g, "").slice(0, 6))
+              }
+            />
+            <div className="text-[12px] text-[var(--muted-2)] text-center">
+              Sent to <b>{email.trim().toLowerCase()}</b>
+            </div>
           </div>
-          <div className="font-semibold">Check your email.</div>
-          <div className="text-[13px] text-[var(--muted)]">
-            We sent a link to <b>{email.trim().toLowerCase()}</b>. Open it on
-            this device to finish signing in.
-          </div>
+
+          {error && (
+            <div className="rounded-[var(--radius)] border border-[var(--danger-border)] bg-[var(--danger-soft)] text-[var(--danger)] px-3 py-2 text-sm">
+              {error}
+            </div>
+          )}
+
           <button
-            onClick={() => {
-              setSent(false);
-              setEmail("");
-            }}
-            className="btn-ghost !h-9 mt-2"
+            type="submit"
+            disabled={verifying || code.length < 6}
+            className="btn-primary w-full"
           >
-            Use a different email
+            {verifying ? "Verifying…" : "Sign in"}
           </button>
-        </div>
+
+          <div className="flex items-center justify-between text-[13px]">
+            <button
+              type="button"
+              onClick={() => {
+                setSent(false);
+                setCode("");
+                setError(null);
+              }}
+              className="text-[var(--muted)] hover:text-[var(--ink)]"
+            >
+              ← Different email
+            </button>
+            <button
+              type="button"
+              disabled={sending}
+              onClick={async () => {
+                setSending(true);
+                setError(null);
+                const supabase = createClient();
+                const origin = window.location.origin;
+                const { error: resendError } =
+                  await supabase.auth.signInWithOtp({
+                    email: email.trim().toLowerCase(),
+                    options: {
+                      emailRedirectTo: `${origin}/auth/callback?next=${encodeURIComponent(next)}`,
+                      shouldCreateUser: true,
+                    },
+                  });
+                setSending(false);
+                if (resendError) setError(resendError.message);
+              }}
+              className="text-[var(--muted)] hover:text-[var(--ink)]"
+            >
+              {sending ? "Sending…" : "Resend code"}
+            </button>
+          </div>
+        </form>
       ) : (
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSend} className="space-y-4">
           <div className="space-y-2">
             <label className="field-label">Email</label>
             <input
@@ -118,7 +197,7 @@ function LoginForm() {
             disabled={sending || !email.trim()}
             className="btn-primary w-full"
           >
-            {sending ? "Sending…" : "Send magic link"}
+            {sending ? "Sending…" : "Send 6-digit code"}
           </button>
           <p className="text-center text-[12px] text-[var(--muted-2)] pt-2">
             Only approved emails can sign in. Ask an admin if you&apos;re not on
