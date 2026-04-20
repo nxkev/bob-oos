@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { supabase, hasSupabase, type Category } from "@/lib/supabase";
 
@@ -10,39 +10,71 @@ const CATEGORIES: { value: Category; label: string; emoji: string }[] = [
   { value: "alcohol", label: "Bar", emoji: "🍸" },
 ];
 
-const DAY_OPTIONS = [
-  { value: 0, label: "Out", sub: "now" },
-  { value: 1, label: "1", sub: "day" },
-  { value: 2, label: "2", sub: "days" },
-  { value: 3, label: "3", sub: "days" },
-  { value: 7, label: "7+", sub: "days" },
+type UrgencyKey = "out" | "emergency" | "1" | "2" | "3" | "7";
+
+const URGENT_OPTIONS: {
+  key: UrgencyKey;
+  label: string;
+  sub: string;
+  days: number;
+  emergency: boolean;
+}[] = [
+  { key: "out", label: "Out", sub: "now", days: 0, emergency: false },
+  {
+    key: "emergency",
+    label: "Emergency",
+    sub: "urgent",
+    days: 0,
+    emergency: true,
+  },
+];
+
+const DAY_OPTIONS: {
+  key: UrgencyKey;
+  label: string;
+  sub: string;
+  days: number;
+}[] = [
+  { key: "1", label: "1", sub: "day", days: 1 },
+  { key: "2", label: "2", sub: "days", days: 2 },
+  { key: "3", label: "3", sub: "days", days: 3 },
+  { key: "7", label: "7+", sub: "days", days: 7 },
 ];
 
 const NAME_KEY = "bob-oos.submitter";
+
+type Submitted = {
+  id: string;
+  item: string;
+  category: Category;
+  days_left: number;
+  is_emergency: boolean;
+};
 
 export default function SubmitPage() {
   const [name, setName] = useState("");
   const [item, setItem] = useState("");
   const [category, setCategory] = useState<Category | null>(null);
-  const [daysLeft, setDaysLeft] = useState<number | null>(null);
-  const [emergency, setEmergency] = useState(false);
+  const [urgency, setUrgency] = useState<UrgencyKey | null>(null);
   const [note, setNote] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [sent, setSent] = useState(false);
+  const [justAdded, setJustAdded] = useState(false);
+  const [sessionItems, setSessionItems] = useState<Submitted[]>([]);
+  const itemInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const stored = localStorage.getItem(NAME_KEY);
     if (stored) setName(stored);
   }, []);
 
-  const canSubmit = Boolean(
-    name.trim() && item.trim() && category && daysLeft !== null && !submitting
+  const canAdd = Boolean(
+    name.trim() && item.trim() && category && urgency && !submitting
   );
 
-  async function handleSubmit(e: React.FormEvent) {
+  async function handleAdd(e: React.FormEvent) {
     e.preventDefault();
-    if (!canSubmit) return;
+    if (!canAdd) return;
     setError(null);
     setSubmitting(true);
     localStorage.setItem(NAME_KEY, name.trim());
@@ -55,39 +87,80 @@ export default function SubmitPage() {
       return;
     }
 
-    const { error: insertError } = await supabase.from("oos_reports").insert({
+    const resolved = resolveUrgency(urgency!);
+    const payload = {
       item: item.trim(),
-      category,
-      days_left: daysLeft,
-      is_emergency: emergency || daysLeft === 0,
+      category: category!,
+      days_left: resolved.days,
+      is_emergency: resolved.emergency,
       note: note.trim() || null,
       submitted_by: name.trim(),
-    });
+    };
+
+    const { data, error: insertError } = await supabase
+      .from("oos_reports")
+      .insert(payload)
+      .select("id")
+      .single();
 
     setSubmitting(false);
+
     if (insertError) {
       setError(insertError.message);
       return;
     }
 
-    setSent(true);
+    setSessionItems((prev) => [
+      {
+        id: data?.id ?? crypto.randomUUID(),
+        item: payload.item,
+        category: payload.category,
+        days_left: payload.days_left,
+        is_emergency: payload.is_emergency,
+      },
+      ...prev,
+    ]);
+
     setItem("");
     setCategory(null);
-    setDaysLeft(null);
-    setEmergency(false);
+    setUrgency(null);
     setNote("");
-    setTimeout(() => setSent(false), 2600);
+    setJustAdded(true);
+    setTimeout(() => setJustAdded(false), 1400);
+    itemInputRef.current?.focus();
   }
+
+  const count = sessionItems.length;
 
   return (
     <div className="space-y-7">
       <header>
-        <div className="field-label mb-2">New report</div>
-        <h1 className="text-[28px] leading-[1.1] font-semibold tracking-tight">
-          Flag something running low.
+        <div className="flex items-center justify-between gap-3">
+          <div className="field-label">New report</div>
+          {count > 0 && (
+            <span
+              className="pill"
+              style={{
+                borderColor: "var(--border-strong)",
+                background: "var(--surface)",
+              }}
+            >
+              <span
+                className="dot"
+                style={{ background: "var(--ok)", marginRight: 6 }}
+              />
+              {count} sent
+            </span>
+          )}
+        </div>
+        <h1 className="text-[28px] leading-[1.1] font-semibold tracking-tight mt-2">
+          {count === 0
+            ? "Flag something running low."
+            : "What else is running low?"}
         </h1>
         <p className="text-[var(--muted)] mt-2 text-[15px]">
-          Ten seconds. The manager sees it instantly.
+          Tap <span className="font-medium text-[var(--ink)]">+ Add</span> to
+          queue up the next one. Keep going until you&apos;re done.
         </p>
       </header>
 
@@ -97,7 +170,9 @@ export default function SubmitPage() {
         </div>
       )}
 
-      <form onSubmit={handleSubmit} className="space-y-6">
+      {count > 0 && <SessionList items={sessionItems} />}
+
+      <form onSubmit={handleAdd} className="space-y-6">
         <Field label="Your name">
           <input
             className="input"
@@ -111,6 +186,7 @@ export default function SubmitPage() {
 
         <Field label="What's running out?">
           <input
+            ref={itemInputRef}
             className="input"
             value={item}
             onChange={(e) => setItem(e.target.value)}
@@ -138,88 +214,50 @@ export default function SubmitPage() {
         </Field>
 
         <Field label="How long will it last?">
-          <div className="grid grid-cols-5 gap-2">
-            {DAY_OPTIONS.map((d) => (
-              <button
-                type="button"
-                key={d.value}
-                onClick={() => setDaysLeft(d.value)}
-                data-on={daysLeft === d.value}
-                className="chip flex-col !min-h-[68px] gap-0.5"
-              >
-                <span className="num-mono text-lg font-semibold leading-none">
-                  {d.label}
-                </span>
-                <span
-                  className="text-[11px] font-medium uppercase tracking-wider"
-                  style={{
-                    color: daysLeft === d.value ? "inherit" : "var(--muted-2)",
-                    opacity: daysLeft === d.value ? 0.7 : 1,
-                  }}
+          <div className="space-y-2">
+            <div className="grid grid-cols-2 gap-2">
+              {URGENT_OPTIONS.map((o) => (
+                <UrgencyChip
+                  key={o.key}
+                  option={o}
+                  selected={urgency === o.key}
+                  onSelect={() => setUrgency(o.key)}
+                />
+              ))}
+            </div>
+            <div className="grid grid-cols-4 gap-2">
+              {DAY_OPTIONS.map((d) => (
+                <button
+                  type="button"
+                  key={d.key}
+                  onClick={() => setUrgency(d.key)}
+                  data-on={urgency === d.key}
+                  className="chip flex-col !min-h-[68px] gap-0.5"
                 >
-                  {d.sub}
-                </span>
-              </button>
-            ))}
+                  <span className="num-mono text-lg font-semibold leading-none">
+                    {d.label}
+                  </span>
+                  <span
+                    className="text-[11px] font-medium uppercase tracking-wider"
+                    style={{
+                      color: urgency === d.key ? "inherit" : "var(--muted-2)",
+                      opacity: urgency === d.key ? 0.7 : 1,
+                    }}
+                  >
+                    {d.sub}
+                  </span>
+                </button>
+              ))}
+            </div>
           </div>
         </Field>
 
-        <label
-          className={`flex items-center gap-3 p-4 rounded-[var(--radius)] border cursor-pointer select-none transition-colors ${
-            emergency
-              ? "border-[var(--danger)] bg-[var(--danger-soft)]"
-              : "border-[var(--border)] bg-[var(--surface)] hover:border-[var(--border-strong)]"
-          }`}
-        >
-          <input
-            type="checkbox"
-            checked={emergency}
-            onChange={(e) => setEmergency(e.target.checked)}
-            className="sr-only"
-          />
-          <span
-            className={`h-6 w-6 rounded-md border-2 flex items-center justify-center transition-colors ${
-              emergency
-                ? "bg-[var(--danger)] border-[var(--danger)]"
-                : "border-[var(--border-strong)]"
-            }`}
-          >
-            {emergency && (
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 14 14"
-                fill="none"
-                aria-hidden
-              >
-                <path
-                  d="M3 7.5L5.5 10L11 4"
-                  stroke="white"
-                  strokeWidth="2.4"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            )}
-          </span>
-          <div className="flex-1">
-            <div
-              className={`font-medium ${emergency ? "text-[var(--danger)]" : ""}`}
-            >
-              Emergency
-            </div>
-            <div className="text-[13px] text-[var(--muted)]">
-              Skip the queue — ping the manager now.
-            </div>
-          </div>
-        </label>
-
-        <Field label="Note (optional)">
+        <Field label="How many left (optional)">
           <textarea
             className="input min-h-[84px] resize-none"
             value={note}
             onChange={(e) => setNote(e.target.value)}
-            placeholder="Brand, size, supplier, whatever helps..."
+            placeholder="e.g. 2 bottles, half a case, one crate..."
           />
         </Field>
 
@@ -229,37 +267,113 @@ export default function SubmitPage() {
           </div>
         )}
 
-        <div className="sticky bottom-0 -mx-4 px-4 pb-[max(16px,env(safe-area-inset-bottom))] pt-3 bg-gradient-to-t from-[var(--bg)] via-[var(--bg)] to-transparent">
+        <div className="sticky bottom-0 -mx-4 px-4 pb-[max(16px,env(safe-area-inset-bottom))] pt-3 bg-gradient-to-t from-[var(--bg)] via-[var(--bg)] to-transparent space-y-2">
           <button
             type="submit"
-            disabled={!canSubmit}
+            disabled={!canAdd}
             className="btn-primary w-full"
           >
             {submitting ? (
               <>
-                <Spinner /> Sending…
+                <Spinner /> Adding…
               </>
-            ) : sent ? (
-              "Sent ✓"
+            ) : justAdded ? (
+              <>
+                <Check /> Added — next one
+              </>
             ) : (
-              "Send to manager"
+              <>
+                <Plus /> Add {count === 0 ? "" : "another"}
+              </>
             )}
           </button>
+          {count > 0 && (
+            <Link
+              href="/"
+              className="block w-full text-center text-[14px] font-medium text-[var(--muted)] hover:text-[var(--ink)] py-2"
+            >
+              Done — view list →
+            </Link>
+          )}
         </div>
       </form>
+    </div>
+  );
+}
 
-      {sent && (
-        <div
-          role="status"
-          className="toast fixed left-1/2 -translate-x-1/2 bottom-[max(100px,calc(env(safe-area-inset-bottom)+88px))] z-40 rounded-full bg-[var(--ink)] text-[var(--bg)] px-4 py-2.5 text-sm font-medium shadow-lg flex items-center gap-2"
-        >
-          <span className="dot" style={{ background: "var(--ok)" }} />
-          Logged.{" "}
-          <Link href="/" className="underline underline-offset-2">
-            View list
-          </Link>
-        </div>
-      )}
+function resolveUrgency(key: UrgencyKey): { days: number; emergency: boolean } {
+  const urgent = URGENT_OPTIONS.find((o) => o.key === key);
+  if (urgent) return { days: urgent.days, emergency: urgent.emergency };
+  const day = DAY_OPTIONS.find((o) => o.key === key)!;
+  return { days: day.days, emergency: false };
+}
+
+function UrgencyChip({
+  option,
+  selected,
+  onSelect,
+}: {
+  option: (typeof URGENT_OPTIONS)[number];
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const isEmergency = option.key === "emergency";
+  const selectedBg = isEmergency ? "var(--danger)" : "var(--ink)";
+  const selectedFg = isEmergency ? "var(--danger-ink)" : "var(--bg)";
+  const selectedBorder = isEmergency ? "var(--danger)" : "var(--ink)";
+  const restingBorder = isEmergency ? "var(--danger-border)" : "var(--border)";
+  const restingBg = isEmergency ? "var(--danger-soft)" : "var(--surface)";
+  const restingFg = isEmergency ? "var(--danger)" : "var(--ink)";
+
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className="chip flex-col !min-h-[72px] gap-0.5"
+      style={{
+        background: selected ? selectedBg : restingBg,
+        borderColor: selected ? selectedBorder : restingBorder,
+        color: selected ? selectedFg : restingFg,
+      }}
+    >
+      <span className="text-[15px] font-semibold leading-none">
+        {option.label}
+      </span>
+      <span
+        className="text-[11px] font-medium uppercase tracking-wider"
+        style={{ opacity: 0.7 }}
+      >
+        {option.sub}
+      </span>
+    </button>
+  );
+}
+
+function SessionList({ items }: { items: Submitted[] }) {
+  return (
+    <div className="space-y-1.5">
+      <div className="field-label">Added this session</div>
+      <ul className="divide-y divide-[var(--border)] rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] overflow-hidden">
+        {items.map((it) => (
+          <li
+            key={it.id}
+            className="flex items-center gap-3 px-3 py-2.5 text-[14px]"
+          >
+            <span
+              className="flex-shrink-0 h-7 w-7 rounded-lg flex items-center justify-center bg-[var(--bg-elev)]"
+              aria-hidden
+            >
+              {CATEGORIES.find((c) => c.value === it.category)?.emoji}
+            </span>
+            <span className="font-medium truncate flex-1">{it.item}</span>
+            <span className="num-mono text-[13px] text-[var(--muted)]">
+              {it.days_left === 0 ? "out" : `${it.days_left}d`}
+            </span>
+            {it.is_emergency && <span className="pill pill-danger">E</span>}
+            <Check size={14} aria-label="saved" />
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -276,6 +390,44 @@ function Field({
       <div className="field-label">{label}</div>
       {children}
     </div>
+  );
+}
+
+function Plus() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M12 5v14M5 12h14"
+        stroke="currentColor"
+        strokeWidth="2.4"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function Check({
+  size = 16,
+  ...rest
+}: { size?: number } & React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      aria-hidden
+      style={{ color: "var(--ok)" }}
+      {...rest}
+    >
+      <path
+        d="M4 12l5 5L20 6"
+        stroke="currentColor"
+        strokeWidth="2.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
   );
 }
 
