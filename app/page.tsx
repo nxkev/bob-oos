@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { createClient, hasSupabase } from "@/lib/supabase/client";
+import type { User } from "@supabase/supabase-js";
 import type {
   CatalogItem,
   Category,
@@ -20,12 +21,28 @@ export default function ManagerPage() {
   const [catalog, setCatalog] = useState<CatalogItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
 
   useEffect(() => {
     const supabase = createClient();
     let cancelled = false;
 
     async function load() {
+      const {
+        data: { user: u },
+      } = await supabase.auth.getUser();
+      if (!cancelled) setUser(u);
+
+      const role = u?.email
+        ? await supabase
+            .from("allowed_emails")
+            .select("role")
+            .ilike("email", u.email)
+            .maybeSingle()
+        : null;
+      if (!cancelled) setIsAdmin(role?.data?.role === "admin");
+
       const [r, c] = await Promise.all([
         supabase
           .from("oos_reports")
@@ -226,7 +243,24 @@ export default function ManagerPage() {
               : "The master list. Add items here so you can tick them off as you restock."}
           </p>
         </div>
+        {isAdmin && (
+          <Link
+            href="/admin"
+            className="btn-ghost !h-9 gap-1.5 flex-shrink-0"
+            title="Add or remove users"
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden>
+              <path d="M16 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0zM4 21a8 8 0 0 1 16 0" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
+            </svg>
+            Manage team
+          </Link>
+        )}
       </header>
+      {user && (
+        <div className="text-[12px] text-[var(--muted-2)]">
+          Signed in as {user.email}
+        </div>
+      )}
 
       {!hasSupabase && (
         <div className="rounded-[var(--radius)] border border-[var(--warn-border)] bg-[var(--warn-soft)] text-[var(--warn)] px-3 py-2 text-sm">

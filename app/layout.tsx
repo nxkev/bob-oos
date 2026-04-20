@@ -39,7 +39,7 @@ async function getSession() {
     const { data: allowed } = await supabase
       .from("allowed_emails")
       .select("role")
-      .eq("email", user.email)
+      .ilike("email", user.email)
       .maybeSingle();
     return {
       email: user.email,
@@ -91,9 +91,12 @@ export default async function RootLayout({
                 {isAdmin && (
                   <Link
                     href="/admin"
-                    className="text-[13px] font-medium text-[var(--muted)] hover:text-[var(--ink)] px-2 py-1.5 rounded-md"
+                    className="inline-flex items-center gap-1.5 text-[13px] font-medium px-2.5 py-1.5 rounded-md border border-[var(--border-strong)] bg-[var(--surface)] text-[var(--ink)] hover:bg-[var(--bg-elev)]"
                   >
-                    Admin
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden>
+                      <path d="M16 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0zM4 21a8 8 0 0 1 16 0" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
+                    </svg>
+                    Team
                   </Link>
                 )}
                 <form action="/auth/signout" method="post">

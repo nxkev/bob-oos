@@ -12,7 +12,7 @@ export default async function AdminPage() {
   const { data: row } = await supabase
     .from("allowed_emails")
     .select("role")
-    .eq("email", user.email)
+    .ilike("email", user.email)
     .maybeSingle();
 
   if (row?.role !== "admin") {
