@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import Link from "next/link";
 import { Geist, Geist_Mono } from "next/font/google";
+import { createClient } from "@/lib/supabase/server";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -28,11 +29,34 @@ export const viewport: Viewport = {
   ],
 };
 
-export default function RootLayout({
+async function getSession() {
+  try {
+    const supabase = await createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user?.email) return { email: null, isAdmin: false };
+    const { data: allowed } = await supabase
+      .from("allowed_emails")
+      .select("role")
+      .eq("email", user.email)
+      .maybeSingle();
+    return {
+      email: user.email,
+      isAdmin: allowed?.role === "admin",
+    };
+  } catch {
+    return { email: null, isAdmin: false };
+  }
+}
+
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const { email, isAdmin } = await getSession();
+
   return (
     <html
       lang="en"
@@ -40,7 +64,7 @@ export default function RootLayout({
     >
       <body className="min-h-full flex flex-col">
         <header className="sticky top-0 z-30 border-b border-[var(--border)] bg-[color-mix(in_oklab,var(--bg)_92%,transparent)] backdrop-blur">
-          <nav className="max-w-xl mx-auto flex items-center justify-between px-4 h-14">
+          <nav className="max-w-xl mx-auto flex items-center justify-between px-4 h-14 gap-3">
             <Link
               href="/"
               className="flex items-center gap-2 font-semibold tracking-tight"
@@ -50,20 +74,46 @@ export default function RootLayout({
               </span>
               <span>Bob&apos;s OOS</span>
             </Link>
-            <div className="seg">
+            {email ? (
+              <div className="flex items-center gap-2">
+                <Link
+                  href="/"
+                  className="text-[13px] font-medium text-[var(--muted)] hover:text-[var(--ink)] px-2 py-1.5 rounded-md"
+                >
+                  List
+                </Link>
+                <Link
+                  href="/submit"
+                  className="text-[13px] font-medium text-[var(--muted)] hover:text-[var(--ink)] px-2 py-1.5 rounded-md"
+                >
+                  Submit
+                </Link>
+                {isAdmin && (
+                  <Link
+                    href="/admin"
+                    className="text-[13px] font-medium text-[var(--muted)] hover:text-[var(--ink)] px-2 py-1.5 rounded-md"
+                  >
+                    Admin
+                  </Link>
+                )}
+                <form action="/auth/signout" method="post">
+                  <button
+                    type="submit"
+                    className="btn-ghost !h-8 !text-[13px]"
+                    title={email}
+                  >
+                    Sign out
+                  </button>
+                </form>
+              </div>
+            ) : (
               <Link
-                href="/"
-                className="px-3 py-1.5 rounded-md text-sm font-medium text-[var(--muted)] hover:text-[var(--ink)]"
+                href="/login"
+                className="text-[13px] font-medium text-[var(--muted)] hover:text-[var(--ink)] px-2 py-1.5 rounded-md"
               >
-                List
+                Sign in
               </Link>
-              <Link
-                href="/submit"
-                className="px-3 py-1.5 rounded-md text-sm font-medium bg-[var(--surface)] text-[var(--ink)] shadow-sm"
-              >
-                Submit
-              </Link>
-            </div>
+            )}
           </nav>
         </header>
         <main className="flex-1 max-w-xl w-full mx-auto px-4 pt-6 pb-24">

@@ -2,98 +2,92 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import {
-  supabase,
-  hasSupabase,
-  type Category,
-  type OosReport,
-  type Status,
+import { createClient, hasSupabase } from "@/lib/supabase/client";
+import type {
+  CatalogItem,
+  Category,
+  Destination,
+  OosReport,
 } from "@/lib/supabase";
 
-const CATEGORY_LABEL: Record<Category, string> = {
-  grocery: "Grocery",
-  alcohol: "Alcohol",
-};
+type Tab = "reports" | "catalog";
+type DestFilter = Destination | "all";
 
-const CATEGORY_EMOJI: Record<Category, string> = {
-  grocery: "🥬",
-  alcohol: "🍸",
-};
-
-type CategoryFilter = Category | "all";
-type StatusFilter = Status | "all";
-type SortKey = "urgency" | "alpha";
-
-export default function ManagerListPage() {
+export default function ManagerPage() {
+  const [tab, setTab] = useState<Tab>("reports");
+  const [destFilter, setDestFilter] = useState<DestFilter>("owner");
   const [reports, setReports] = useState<OosReport[]>([]);
+  const [catalog, setCatalog] = useState<CatalogItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>("all");
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("open");
-  const [sortKey, setSortKey] = useState<SortKey>("urgency");
 
   useEffect(() => {
-    if (!supabase) {
-      setLoading(false);
-      return;
-    }
-    const client = supabase;
+    const supabase = createClient();
     let cancelled = false;
 
     async function load() {
-      const { data, error: fetchError } = await client
-        .from("oos_reports")
-        .select("*")
-        .order("is_emergency", { ascending: false })
-        .order("days_left", { ascending: true })
-        .order("created_at", { ascending: false });
+      const [r, c] = await Promise.all([
+        supabase
+          .from("oos_reports")
+          .select("*")
+          .order("is_emergency", { ascending: false })
+          .order("created_at", { ascending: false }),
+        supabase
+          .from("catalog_items")
+          .select("*")
+          .order("name", { ascending: true }),
+      ]);
       if (cancelled) return;
-      if (fetchError) setError(fetchError.message);
-      else setReports((data ?? []) as OosReport[]);
+      if (r.error) setError(r.error.message);
+      else setReports((r.data ?? []) as OosReport[]);
+      if (c.error) setError(c.error.message);
+      else setCatalog((c.data ?? []) as CatalogItem[]);
       setLoading(false);
     }
 
     load();
-    const channel = client
-      .channel("oos_reports_changes")
+
+    const channel = supabase
+      .channel("oos_changes")
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "oos_reports" },
+        () => load()
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "catalog_items" },
         () => load()
       )
       .subscribe();
 
     return () => {
       cancelled = true;
-      client.removeChannel(channel);
+      supabase.removeChannel(channel);
     };
   }, []);
 
-  const filtered = useMemo(() => {
-    const base = reports.filter((r) => {
-      if (categoryFilter !== "all" && r.category !== categoryFilter)
-        return false;
-      if (statusFilter !== "all" && r.status !== statusFilter) return false;
-      return true;
-    });
-    if (sortKey === "alpha") {
-      return [...base].sort((a, b) =>
-        a.item.localeCompare(b.item, undefined, { sensitivity: "base" })
-      );
-    }
-    return [...base].sort((a, b) => {
-      if (a.is_emergency !== b.is_emergency) return a.is_emergency ? -1 : 1;
-      if (a.days_left !== b.days_left) return a.days_left - b.days_left;
-      return b.created_at.localeCompare(a.created_at);
-    });
-  }, [reports, categoryFilter, statusFilter, sortKey]);
+  const scopedReports = useMemo(
+    () =>
+      destFilter === "all"
+        ? reports
+        : reports.filter((r) => r.destination === destFilter),
+    [reports, destFilter]
+  );
+  const scopedCatalog = useMemo(
+    () =>
+      destFilter === "all"
+        ? catalog
+        : catalog.filter((c) => c.destination === destFilter),
+    [catalog, destFilter]
+  );
+  const openReports = scopedReports.filter((r) => r.status === "open");
+  const resolvedReports = scopedReports.filter(
+    (r) => r.status === "resolved"
+  );
 
-  const openReports = reports.filter((r) => r.status === "open");
-  const openCount = openReports.length;
-  const emergencyCount = openReports.filter((r) => r.is_emergency).length;
-
-  async function resolve(id: string) {
-    if (!supabase) return;
+  async function resolveReport(id: string) {
+    const supabase = createClient();
     setReports((prev) =>
       prev.map((r) =>
         r.id === id
@@ -101,151 +95,181 @@ export default function ManagerListPage() {
           : r
       )
     );
-    const { error: updateError } = await supabase
+    const { error } = await supabase
       .from("oos_reports")
       .update({ status: "resolved", resolved_at: new Date().toISOString() })
       .eq("id", id);
-    if (updateError) setError(updateError.message);
+    if (error) setError(error.message);
   }
 
-  async function reopen(id: string) {
-    if (!supabase) return;
+  async function reopenReport(id: string) {
+    const supabase = createClient();
     setReports((prev) =>
       prev.map((r) =>
         r.id === id ? { ...r, status: "open", resolved_at: null } : r
       )
     );
-    const { error: updateError } = await supabase
+    const { error } = await supabase
       .from("oos_reports")
       .update({ status: "open", resolved_at: null })
       .eq("id", id);
-    if (updateError) setError(updateError.message);
+    if (error) setError(error.message);
   }
 
   async function clearResolved() {
-    if (!supabase) return;
-    const resolvedIds = reports
-      .filter((r) => r.status === "resolved")
-      .map((r) => r.id);
-    if (resolvedIds.length === 0) return;
+    if (resolvedReports.length === 0) return;
     const ok = window.confirm(
-      `Delete ${resolvedIds.length} resolved ${resolvedIds.length === 1 ? "item" : "items"}? This cannot be undone.`
+      `Delete ${resolvedReports.length} resolved ${resolvedReports.length === 1 ? "item" : "items"}? This cannot be undone.`
     );
     if (!ok) return;
+    const ids = resolvedReports.map((r) => r.id);
     setReports((prev) => prev.filter((r) => r.status !== "resolved"));
-    const { error: deleteError } = await supabase
-      .from("oos_reports")
-      .delete()
-      .in("id", resolvedIds);
-    if (deleteError) setError(deleteError.message);
+    const supabase = createClient();
+    const { error } = await supabase.from("oos_reports").delete().in("id", ids);
+    if (error) setError(error.message);
   }
 
-  const resolvedCount = reports.length - openCount;
+  async function addToCatalog(report: OosReport) {
+    const supabase = createClient();
+    const name = report.item.trim();
+    const category: Category =
+      report.category === "alcohol" ? "alcohol" : "grocery";
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    const { data, error } = await supabase
+      .from("catalog_items")
+      .upsert(
+        {
+          name,
+          category,
+          created_by: user?.email ?? null,
+          active: true,
+          destination: report.destination,
+        },
+        { onConflict: "name" }
+      )
+      .select()
+      .maybeSingle();
+    if (error) {
+      setError(error.message);
+      return;
+    }
+    if (data) {
+      // Link the report to the catalog item and resolve it in one pass.
+      await supabase
+        .from("oos_reports")
+        .update({
+          catalog_item_id: data.id,
+          status: "resolved",
+          resolved_at: new Date().toISOString(),
+        })
+        .eq("id", report.id);
+    }
+  }
+
+  async function addCatalogItem(
+    name: string,
+    category: Category,
+    destination: Destination,
+    supplier: string | null
+  ) {
+    const cleaned = name.trim();
+    if (!cleaned) return;
+    const supabase = createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    const { error } = await supabase.from("catalog_items").insert({
+      name: cleaned,
+      category,
+      destination,
+      supplier: supplier?.trim() || null,
+      created_by: user?.email ?? null,
+    });
+    if (error) setError(error.message);
+  }
+
+  async function updateCatalogItem(id: string, patch: Partial<CatalogItem>) {
+    const supabase = createClient();
+    setCatalog((prev) =>
+      prev.map((c) => (c.id === id ? { ...c, ...patch } : c))
+    );
+    const { error } = await supabase
+      .from("catalog_items")
+      .update(patch)
+      .eq("id", id);
+    if (error) setError(error.message);
+  }
+
+  async function removeCatalogItem(id: string) {
+    const supabase = createClient();
+    setCatalog((prev) => prev.filter((c) => c.id !== id));
+    const { error } = await supabase
+      .from("catalog_items")
+      .delete()
+      .eq("id", id);
+    if (error) setError(error.message);
+  }
 
   return (
-    <div className="space-y-6">
-      <header className="space-y-4">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <div className="field-label mb-2">Inventory</div>
-            <h1 className="text-[28px] leading-[1.1] font-semibold tracking-tight">
-              Running low.
-            </h1>
-          </div>
-          <Link
-            href="/submit"
-            className="btn-ghost !h-9 hidden sm:inline-flex gap-1.5"
-          >
-            <Plus /> New
-          </Link>
+    <div className="space-y-5">
+      <header className="flex items-start justify-between gap-4">
+        <div>
+          <div className="field-label mb-2">Inventory</div>
+          <h1 className="text-[28px] leading-[1.1] font-semibold tracking-tight">
+            {tab === "reports" ? "What's missing." : "Your item list."}
+          </h1>
+          <p className="text-[var(--muted)] mt-2 text-[15px]">
+            {tab === "reports"
+              ? "Staff-flagged items, newest first. Add anything staff flagged to your list."
+              : "The master list. Add items here so you can tick them off as you restock."}
+          </p>
         </div>
-
-        <StatRow
-          openCount={openCount}
-          emergencyCount={emergencyCount}
-          resolvedCount={resolvedCount}
-        />
       </header>
 
       {!hasSupabase && (
         <div className="rounded-[var(--radius)] border border-[var(--warn-border)] bg-[var(--warn-soft)] text-[var(--warn)] px-3 py-2 text-sm">
-          Supabase not configured. Copy <code>.env.local.example</code> →{" "}
-          <code>.env.local</code>, run <code>supabase/schema.sql</code>, restart
-          dev.
+          Supabase not configured.
         </div>
       )}
 
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="seg">
+      <div className="space-y-2">
+        <div className="seg w-full justify-stretch">
           {(
             [
-              { value: "open", label: "Open" },
-              { value: "resolved", label: "Resolved" },
+              { value: "owner", label: "Bob's list" },
+              { value: "manager", label: "Manager's list" },
               { value: "all", label: "All" },
-            ] as { value: StatusFilter; label: string }[]
+            ] as { value: DestFilter; label: string }[]
           ).map((o) => (
             <button
               key={o.value}
-              data-on={statusFilter === o.value}
-              onClick={() => setStatusFilter(o.value)}
+              data-on={destFilter === o.value}
+              onClick={() => setDestFilter(o.value)}
+              className="flex-1"
             >
               {o.label}
             </button>
           ))}
         </div>
-        <div className="seg">
-          {(
-            [
-              { value: "all", label: "All" },
-              { value: "grocery", label: "Grocery" },
-              { value: "alcohol", label: "Alcohol" },
-            ] as { value: CategoryFilter; label: string }[]
-          ).map((o) => (
-            <button
-              key={o.value}
-              data-on={categoryFilter === o.value}
-              onClick={() => setCategoryFilter(o.value)}
-            >
-              {o.label}
-            </button>
-          ))}
-        </div>
-        <div className="seg ml-auto">
-          {(
-            [
-              { value: "urgency", label: "Days left" },
-              { value: "alpha", label: "A–Z" },
-            ] as { value: SortKey; label: string }[]
-          ).map((o) => (
-            <button
-              key={o.value}
-              data-on={sortKey === o.value}
-              onClick={() => setSortKey(o.value)}
-              aria-label={`Sort by ${o.label}`}
-            >
-              {o.label}
-            </button>
-          ))}
+        <div className="seg w-full justify-stretch">
+          <button
+            data-on={tab === "reports"}
+            onClick={() => setTab("reports")}
+            className="flex-1"
+          >
+            Staff reports ({openReports.length})
+          </button>
+          <button
+            data-on={tab === "catalog"}
+            onClick={() => setTab("catalog")}
+            className="flex-1"
+          >
+            Item list ({scopedCatalog.length})
+          </button>
         </div>
       </div>
-
-      {resolvedCount > 0 &&
-        (statusFilter === "resolved" || statusFilter === "all") && (
-          <div className="flex items-center justify-between gap-2 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--bg-elev)] px-3 py-2">
-            <div className="text-[13px] text-[var(--muted)]">
-              {resolvedCount} resolved{" "}
-              {resolvedCount === 1 ? "item" : "items"} — items older than 7
-              days are flagged.
-            </div>
-            <button
-              onClick={clearResolved}
-              className="btn-ghost !h-8 !text-[13px] gap-1.5 text-[var(--danger)] border-[var(--danger-border)] hover:bg-[var(--danger-soft)]"
-              aria-label="Delete all resolved items"
-            >
-              <Trash /> Clear resolved
-            </button>
-          </div>
-        )}
 
       {error && (
         <div className="rounded-[var(--radius)] border border-[var(--danger-border)] bg-[var(--danger-soft)] text-[var(--danger)] px-3 py-2 text-sm">
@@ -255,116 +279,157 @@ export default function ManagerListPage() {
 
       {loading ? (
         <LoadingList />
-      ) : filtered.length === 0 ? (
-        <EmptyState hasSupabase={hasSupabase} statusFilter={statusFilter} />
+      ) : tab === "reports" ? (
+        <ReportsView
+          open={openReports}
+          resolved={resolvedReports}
+          catalog={catalog}
+          onResolve={resolveReport}
+          onReopen={reopenReport}
+          onAddToCatalog={addToCatalog}
+          onClearResolved={clearResolved}
+        />
       ) : (
-        <ul className="space-y-2.5">
-          {filtered.map((r) => (
+        <CatalogView
+          catalog={scopedCatalog}
+          defaultDestination={destFilter === "all" ? "owner" : destFilter}
+          onAdd={addCatalogItem}
+          onRemove={removeCatalogItem}
+          onUpdate={updateCatalogItem}
+        />
+      )}
+    </div>
+  );
+}
+
+function ReportsView({
+  open,
+  resolved,
+  catalog,
+  onResolve,
+  onReopen,
+  onAddToCatalog,
+  onClearResolved,
+}: {
+  open: OosReport[];
+  resolved: OosReport[];
+  catalog: CatalogItem[];
+  onResolve: (id: string) => void;
+  onReopen: (id: string) => void;
+  onAddToCatalog: (r: OosReport) => void;
+  onClearResolved: () => void;
+}) {
+  const catalogNames = useMemo(
+    () => new Set(catalog.map((c) => c.name.toLowerCase())),
+    [catalog]
+  );
+
+  return (
+    <div className="space-y-6">
+      {open.length === 0 ? (
+        <EmptyState
+          title="Nothing flagged right now"
+          sub="Staff submissions show up here as soon as they send them."
+        />
+      ) : (
+        <div className="space-y-2.5">
+          {open.map((r) => (
             <ReportRow
               key={r.id}
               report={r}
-              onResolve={resolve}
-              onReopen={reopen}
+              inCatalog={catalogNames.has(r.item.toLowerCase())}
+              onResolve={onResolve}
+              onReopen={onReopen}
+              onAddToCatalog={onAddToCatalog}
             />
           ))}
-        </ul>
+        </div>
       )}
 
-      <Link
-        href="/submit"
-        className="sm:hidden fixed bottom-[max(20px,env(safe-area-inset-bottom))] right-4 z-30 h-14 w-14 rounded-full bg-[var(--ink)] text-[var(--bg)] flex items-center justify-center shadow-lg"
-        aria-label="Submit new"
-      >
-        <Plus size={22} />
-      </Link>
-    </div>
-  );
-}
-
-function StatRow({
-  openCount,
-  emergencyCount,
-  resolvedCount,
-}: {
-  openCount: number;
-  emergencyCount: number;
-  resolvedCount: number;
-}) {
-  return (
-    <div className="grid grid-cols-3 gap-2">
-      <Stat label="Open" value={openCount} />
-      <Stat
-        label="Emergency"
-        value={emergencyCount}
-        tone={emergencyCount > 0 ? "danger" : "default"}
-      />
-      <Stat label="Resolved" value={resolvedCount} tone="muted" />
-    </div>
-  );
-}
-
-function Stat({
-  label,
-  value,
-  tone = "default",
-}: {
-  label: string;
-  value: number;
-  tone?: "default" | "danger" | "muted";
-}) {
-  const valueColor =
-    tone === "danger"
-      ? "var(--danger)"
-      : tone === "muted"
-        ? "var(--muted)"
-        : "var(--ink)";
-  return (
-    <div className="card px-3.5 py-3">
-      <div className="field-label !text-[11px]">{label}</div>
-      <div
-        className="num-mono text-2xl font-semibold leading-tight mt-1"
-        style={{ color: valueColor }}
-      >
-        {value}
-      </div>
+      {resolved.length > 0 && (
+        <details className="card px-4 py-3">
+          <summary className="cursor-pointer flex items-center justify-between gap-2">
+            <div className="text-[14px] font-medium">
+              Resolved{" "}
+              <span className="text-[var(--muted)] font-normal">
+                · {resolved.length}
+              </span>
+            </div>
+            <button
+              onClick={(e) => {
+                e.preventDefault();
+                onClearResolved();
+              }}
+              className="btn-ghost !h-8 !text-[12px] text-[var(--danger)] border-[var(--danger-border)] hover:bg-[var(--danger-soft)]"
+            >
+              Clear resolved
+            </button>
+          </summary>
+          <ul className="mt-3 space-y-2">
+            {resolved.map((r) => (
+              <ReportRow
+                key={r.id}
+                report={r}
+                inCatalog={catalogNames.has(r.item.toLowerCase())}
+                onResolve={onResolve}
+                onReopen={onReopen}
+                onAddToCatalog={onAddToCatalog}
+              />
+            ))}
+          </ul>
+        </details>
+      )}
     </div>
   );
 }
 
 function ReportRow({
   report,
+  inCatalog,
   onResolve,
   onReopen,
+  onAddToCatalog,
 }: {
   report: OosReport;
+  inCatalog: boolean;
   onResolve: (id: string) => void;
   onReopen: (id: string) => void;
+  onAddToCatalog: (r: OosReport) => void;
 }) {
   const isOpen = report.status === "open";
-  const urgent = isOpen && report.is_emergency;
-  const soon = isOpen && report.days_left <= 1 && !report.is_emergency;
   const resolvedDays =
     !isOpen && report.resolved_at ? daysSince(report.resolved_at) : null;
   const stale = resolvedDays !== null && resolvedDays >= 7;
 
   return (
     <li
-      className={`card p-4 flex items-start gap-3 ${urgent ? "card-danger" : soon ? "card-warn" : ""} ${isOpen ? "" : stale ? "opacity-70" : "opacity-60"}`}
+      className={`card p-3.5 flex items-start gap-3 ${isOpen ? "" : stale ? "opacity-70" : "opacity-60"}`}
     >
       <div
-        className="flex-shrink-0 h-10 w-10 rounded-[10px] flex items-center justify-center text-xl bg-[var(--bg-elev)]"
+        className="flex-shrink-0 mt-0.5 h-7 w-7 rounded-md flex items-center justify-center bg-[var(--bg-elev)]"
         aria-hidden
       >
-        {CATEGORY_EMOJI[report.category]}
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+          <path
+            d="M9 5h6v2a3 3 0 0 1-6 0V5zM7 9h10l-1 10a2 2 0 0 1-2 2h-4a2 2 0 0 1-2-2L7 9z"
+            stroke="var(--muted)"
+            strokeWidth="1.6"
+            strokeLinejoin="round"
+          />
+        </svg>
       </div>
       <div className="flex-1 min-w-0">
-        <div className="flex items-center flex-wrap gap-1.5">
+        <div className="flex items-center gap-2 flex-wrap">
           <span
             className={`font-semibold text-[15px] tracking-tight ${isOpen ? "" : "line-through"}`}
           >
             {report.item}
           </span>
-          {urgent && <span className="pill pill-danger">Emergency</span>}
+          {inCatalog && isOpen && (
+            <span className="pill" style={{ color: "var(--ok)" }}>
+              In list
+            </span>
+          )}
           {stale && (
             <span
               className="pill"
@@ -378,29 +443,9 @@ function ReportRow({
             </span>
           )}
         </div>
-        <div className="text-[13px] text-[var(--muted)] mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+        <div className="text-[12.5px] text-[var(--muted)] mt-0.5 flex flex-wrap gap-x-2">
           {isOpen ? (
             <>
-              <span className="inline-flex items-center gap-1.5">
-                <span
-                  className="dot"
-                  style={{
-                    background: urgent
-                      ? "var(--danger)"
-                      : soon
-                        ? "var(--warn)"
-                        : "var(--muted-2)",
-                  }}
-                />
-                <span className={urgent || soon ? "font-medium" : ""}>
-                  {report.days_left === 0
-                    ? "Out now"
-                    : `${report.days_left} day${report.days_left === 1 ? "" : "s"} left`}
-                </span>
-              </span>
-              <span className="text-[var(--muted-2)]">·</span>
-              <span>{CATEGORY_LABEL[report.category]}</span>
-              <span className="text-[var(--muted-2)]">·</span>
               <span>{report.submitted_by}</span>
               <span className="text-[var(--muted-2)]">·</span>
               <span className="num-mono">
@@ -408,59 +453,43 @@ function ReportRow({
               </span>
             </>
           ) : (
-            <>
-              <span
-                className={`inline-flex items-center gap-1.5 ${stale ? "font-medium text-[var(--warn)]" : ""}`}
-              >
-                <svg
-                  width="12"
-                  height="12"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  aria-hidden
-                >
-                  <path
-                    d="M4 12l5 5L20 6"
-                    stroke="currentColor"
-                    strokeWidth="3"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-                Resolved{" "}
-                {resolvedDays === 0
-                  ? "today"
-                  : resolvedDays === 1
-                    ? "yesterday"
-                    : `${resolvedDays}d ago`}
-              </span>
-              <span className="text-[var(--muted-2)]">·</span>
-              <span>{CATEGORY_LABEL[report.category]}</span>
-              <span className="text-[var(--muted-2)]">·</span>
-              <span>{report.submitted_by}</span>
-            </>
+            <span
+              className={
+                stale ? "font-medium text-[var(--warn)]" : undefined
+              }
+            >
+              Resolved{" "}
+              {resolvedDays === 0
+                ? "today"
+                : resolvedDays === 1
+                  ? "yesterday"
+                  : `${resolvedDays}d ago`}{" "}
+              · {report.submitted_by}
+            </span>
           )}
         </div>
-        {report.note && (
-          <div className="text-[13.5px] mt-2 text-[var(--ink-soft)] whitespace-pre-wrap">
-            {report.note}
-          </div>
-        )}
       </div>
-      <div className="flex-shrink-0">
+      <div className="flex-shrink-0 flex flex-col gap-1.5">
+        {isOpen && !inCatalog && (
+          <button
+            onClick={() => onAddToCatalog(report)}
+            className="btn-ghost !h-8 !text-[12px]"
+            title="Add to your list + mark resolved"
+          >
+            + To list
+          </button>
+        )}
         {isOpen ? (
           <button
             onClick={() => onResolve(report.id)}
-            className="btn-ghost"
-            aria-label={`Resolve ${report.item}`}
+            className="btn-ghost !h-8 !text-[12px]"
           >
             Resolve
           </button>
         ) : (
           <button
             onClick={() => onReopen(report.id)}
-            className="btn-ghost !text-[var(--muted)]"
-            aria-label={`Reopen ${report.item}`}
+            className="btn-ghost !h-8 !text-[12px] !text-[var(--muted)]"
           >
             Reopen
           </button>
@@ -470,25 +499,278 @@ function ReportRow({
   );
 }
 
-function EmptyState({
-  hasSupabase,
-  statusFilter,
+function CatalogView({
+  catalog,
+  defaultDestination,
+  onAdd,
+  onRemove,
+  onUpdate,
 }: {
-  hasSupabase: boolean;
-  statusFilter: StatusFilter;
+  catalog: CatalogItem[];
+  defaultDestination: Destination;
+  onAdd: (
+    name: string,
+    category: Category,
+    destination: Destination,
+    supplier: string | null
+  ) => void;
+  onRemove: (id: string) => void;
+  onUpdate: (id: string, patch: Partial<CatalogItem>) => void;
 }) {
-  const heading = !hasSupabase
-    ? "No data yet"
-    : statusFilter === "resolved"
-      ? "Nothing resolved yet"
-      : "Everything's in stock.";
-  const sub = hasSupabase
-    ? statusFilter === "resolved"
-      ? "Resolved items will land here."
-      : "Staff reports will appear here the moment they come in."
-    : "Finish the Supabase setup to start receiving reports.";
+  const [newName, setNewName] = useState("");
+  const [newCategory, setNewCategory] = useState<Category>("grocery");
+  const [newSupplier, setNewSupplier] = useState("");
+  const [groupBy, setGroupBy] = useState<"supplier" | "category">("supplier");
+
+  const suppliers = useMemo(() => {
+    const s = new Set<string>();
+    for (const c of catalog) if (c.supplier) s.add(c.supplier);
+    return Array.from(s).sort();
+  }, [catalog]);
+
+  const grouped = useMemo(() => {
+    const map = new Map<string, CatalogItem[]>();
+    for (const c of catalog) {
+      const key =
+        groupBy === "supplier" ? c.supplier || "Unassigned" : c.category;
+      const list = map.get(key) ?? [];
+      list.push(c);
+      map.set(key, list);
+    }
+    return Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b));
+  }, [catalog, groupBy]);
+
   return (
-    <div className="card py-14 px-6 text-center">
+    <div className="space-y-5">
+      <div className="card p-3 space-y-3">
+        <div className="field-label">Add to your list</div>
+        <div className="flex gap-2">
+          <input
+            className="input flex-1"
+            placeholder="e.g. Paper towels, Tito's 1L..."
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && newName.trim()) {
+                onAdd(
+                  newName,
+                  newCategory,
+                  defaultDestination,
+                  newSupplier || null
+                );
+                setNewName("");
+              }
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => {
+              if (newName.trim()) {
+                onAdd(
+                  newName,
+                  newCategory,
+                  defaultDestination,
+                  newSupplier || null
+                );
+                setNewName("");
+              }
+            }}
+            className="btn-primary !h-auto !py-3 !px-4"
+          >
+            Add
+          </button>
+        </div>
+        <div className="flex flex-wrap gap-2 text-[12px]">
+          {(["grocery", "alcohol"] as Category[]).map((c) => (
+            <button
+              key={c}
+              type="button"
+              onClick={() => setNewCategory(c)}
+              data-on={newCategory === c}
+              className="chip !min-h-0 !py-1.5 !px-3 !text-[12px] capitalize"
+            >
+              {c}
+            </button>
+          ))}
+          <input
+            className="input !py-1.5 !px-3 !text-[12px] !w-[160px] ml-auto"
+            placeholder="Supplier (optional)"
+            list="catalog-suppliers"
+            value={newSupplier}
+            onChange={(e) => setNewSupplier(e.target.value)}
+          />
+          <datalist id="catalog-suppliers">
+            {suppliers.map((s) => (
+              <option key={s} value={s} />
+            ))}
+          </datalist>
+        </div>
+      </div>
+
+      {catalog.length > 0 && (
+        <div className="flex items-center justify-between">
+          <div className="field-label">
+            {catalog.length} {catalog.length === 1 ? "item" : "items"}
+          </div>
+          <div className="seg">
+            <button
+              data-on={groupBy === "supplier"}
+              onClick={() => setGroupBy("supplier")}
+            >
+              By supplier
+            </button>
+            <button
+              data-on={groupBy === "category"}
+              onClick={() => setGroupBy("category")}
+            >
+              By category
+            </button>
+          </div>
+        </div>
+      )}
+
+      {catalog.length === 0 ? (
+        <EmptyState
+          title="No items yet"
+          sub="Add items above, or promote staff reports from the other tab."
+        />
+      ) : (
+        <div className="space-y-4">
+          {grouped.map(([key, items]) => (
+            <CatalogGroup
+              key={key}
+              label={key}
+              items={items}
+              suppliers={suppliers}
+              onRemove={onRemove}
+              onUpdate={onUpdate}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CatalogGroup({
+  label,
+  items,
+  suppliers,
+  onRemove,
+  onUpdate,
+}: {
+  label: string;
+  items: CatalogItem[];
+  suppliers: string[];
+  onRemove: (id: string) => void;
+  onUpdate: (id: string, patch: Partial<CatalogItem>) => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <div className="field-label capitalize">
+        {label} · {items.length}
+      </div>
+      <ul className="divide-y divide-[var(--border)] rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] overflow-hidden">
+        {items.map((it) => (
+          <CatalogRow
+            key={it.id}
+            item={it}
+            suppliers={suppliers}
+            onRemove={onRemove}
+            onUpdate={onUpdate}
+          />
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function CatalogRow({
+  item,
+  suppliers,
+  onRemove,
+  onUpdate,
+}: {
+  item: CatalogItem;
+  suppliers: string[];
+  onRemove: (id: string) => void;
+  onUpdate: (id: string, patch: Partial<CatalogItem>) => void;
+}) {
+  const [editingSupplier, setEditingSupplier] = useState(false);
+  const [supplier, setSupplier] = useState(item.supplier ?? "");
+
+  function commitSupplier() {
+    setEditingSupplier(false);
+    const next = supplier.trim() || null;
+    if ((item.supplier ?? null) !== next) onUpdate(item.id, { supplier: next });
+  }
+
+  return (
+    <li className="flex items-center gap-3 px-3 py-2.5 text-[14px]">
+      <span className="flex-1 min-w-0">
+        <span className="font-medium truncate">{item.name}</span>
+        <div className="text-[12px] text-[var(--muted)] mt-0.5 flex items-center gap-2">
+          <span className="capitalize">{item.category}</span>
+          <span className="text-[var(--muted-2)]">·</span>
+          {editingSupplier ? (
+            <input
+              autoFocus
+              list="catalog-suppliers"
+              className="input !py-0.5 !px-1.5 !text-[12px] !w-[140px]"
+              value={supplier}
+              onChange={(e) => setSupplier(e.target.value)}
+              onBlur={commitSupplier}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitSupplier();
+                if (e.key === "Escape") {
+                  setSupplier(item.supplier ?? "");
+                  setEditingSupplier(false);
+                }
+              }}
+              placeholder="Supplier"
+            />
+          ) : (
+            <button
+              onClick={() => setEditingSupplier(true)}
+              className="hover:text-[var(--ink)] underline-offset-2 hover:underline"
+            >
+              {item.supplier || "+ supplier"}
+            </button>
+          )}
+        </div>
+      </span>
+      <button
+        onClick={() =>
+          onUpdate(item.id, {
+            destination: item.destination === "owner" ? "manager" : "owner",
+          })
+        }
+        className="btn-ghost !h-7 !text-[11px] capitalize"
+        title="Toggle list owner"
+      >
+        {item.destination === "owner" ? "Bob" : "Mgr"}
+      </button>
+      <button
+        onClick={() => onRemove(item.id)}
+        aria-label={`Remove ${item.name}`}
+        className="h-8 w-8 rounded-md text-[var(--muted)] hover:text-[var(--danger)] hover:bg-[var(--bg-elev)] flex items-center justify-center"
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+          <path
+            d="M6 6l12 12M18 6L6 18"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+          />
+        </svg>
+      </button>
+    </li>
+  );
+}
+
+function EmptyState({ title, sub }: { title: string; sub: string }) {
+  return (
+    <div className="card py-12 px-6 text-center">
       <div className="mx-auto h-12 w-12 rounded-full flex items-center justify-center bg-[var(--bg-elev)] mb-4">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
           <path
@@ -500,7 +782,7 @@ function EmptyState({
           />
         </svg>
       </div>
-      <div className="font-semibold text-[15px]">{heading}</div>
+      <div className="font-semibold text-[15px]">{title}</div>
       <div className="text-[13px] text-[var(--muted)] mt-1 max-w-xs mx-auto">
         {sub}
       </div>
@@ -513,7 +795,7 @@ function LoadingList() {
     <ul className="space-y-2.5">
       {[0, 1, 2].map((i) => (
         <li key={i} className="card p-4 flex items-center gap-3">
-          <div className="h-10 w-10 rounded-[10px] bg-[var(--bg-elev)] animate-pulse" />
+          <div className="h-8 w-8 rounded-md bg-[var(--bg-elev)] animate-pulse" />
           <div className="flex-1 space-y-2">
             <div className="h-4 w-2/3 rounded bg-[var(--bg-elev)] animate-pulse" />
             <div className="h-3 w-1/2 rounded bg-[var(--bg-elev)] animate-pulse" />
@@ -522,39 +804,6 @@ function LoadingList() {
       ))}
     </ul>
   );
-}
-
-function Plus({ size = 16 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden>
-      <path
-        d="M12 5v14M5 12h14"
-        stroke="currentColor"
-        strokeWidth="2.2"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
-}
-
-function Trash() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden>
-      <path
-        d="M4 7h16M10 11v6M14 11v6M5 7l1 13a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2l1-13M9 7V4h6v3"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-function daysSince(iso: string): number {
-  const then = new Date(iso).getTime();
-  const now = Date.now();
-  return Math.floor((now - then) / (1000 * 60 * 60 * 24));
 }
 
 function relativeTime(iso: string): string {
@@ -568,4 +817,10 @@ function relativeTime(iso: string): string {
   if (diffHr < 24) return `${diffHr}h ago`;
   const diffDay = Math.round(diffHr / 24);
   return `${diffDay}d ago`;
+}
+
+function daysSince(iso: string): number {
+  const then = new Date(iso).getTime();
+  const now = Date.now();
+  return Math.floor((now - then) / (1000 * 60 * 60 * 24));
 }
